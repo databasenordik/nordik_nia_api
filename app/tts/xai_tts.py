@@ -10,8 +10,6 @@ from urllib.parse import urlencode
 
 from app.config import get_settings
 
-XAI_TTS_URL = "wss://api.x.ai/v1/tts"
-
 OpenSocket = Callable[[str, dict[str, str], float], Awaitable[Any]]
 
 
@@ -38,7 +36,7 @@ class XAITTSProvider:
         self._language = language or settings.xai_tts_language
         self._format = audio_format or settings.xai_tts_format
         self._sample_rate = sample_rate or getattr(settings, "xai_tts_sample_rate", 24000)
-        self._url = url or getattr(settings, "xai_tts_url", XAI_TTS_URL)
+        self._url = url or settings.xai_tts_url
         self._open_socket = open_socket or _open_websockets
         self._first_audio_timeout_s = (
             (first_audio_timeout_ms or getattr(settings, "xai_tts_first_audio_timeout_ms", 4000))
