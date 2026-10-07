@@ -43,7 +43,7 @@ include = ["app*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-testpaths = ["../tests", "tests"]
+testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "planner_ai: exercise the AI planner path (application default is AI; tests stay on legacy unless marked)",
