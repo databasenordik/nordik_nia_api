@@ -26,14 +26,36 @@ jobs:
           python -m pip install --no-deps .
       - name: Tests
         run: python -m pytest tests -q
+      - name: Pull Python base image with retry
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if docker pull python:3.12-slim; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
       - name: Build and smoke test the deployment image
         run: |
-          docker build -t nia-ci .
+          docker build --pull=false -t nia-ci .
           docker run -d --name nia-ci -p 8080:8080 -e PORT=8080 -e APP_ENV=development -e ASSISTANT_DATABASE_URL=postgresql://unused:unused@127.0.0.1:1/unused nia-ci
           trap 'docker logs nia-ci; docker rm -f nia-ci' EXIT
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://localhost:8080/health > /tmp/health.json; then
               python -c 'import json; assert json.load(open("/tmp/health.json"))["status"] == "ok"'
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - name: Smoke test the gRPC deployment mode
+        run: |
+          docker run -d --name nia-grpc-ci -e PORT=8080 -e APP_ENV=development -e NIA_TRANSPORT=grpc -e NIA_GRPC_PRINCIPAL_ID=ci-fixture -e PLANNER_MODE=legacy -e REASONING_PROVIDER=fake -e ASSISTANT_DATABASE_URL=postgresql://unused:unused@127.0.0.1:1/unused nia-ci
+          trap 'docker logs nia-grpc-ci; docker rm -f nia-grpc-ci' EXIT
+          for attempt in $(seq 1 10); do
+            if docker exec nia-grpc-ci python -m app.grpc_api.probe --target 127.0.0.1:8080 --plaintext --question 'How many records are in this list?'; then
               exit 0
             fi
             sleep 2

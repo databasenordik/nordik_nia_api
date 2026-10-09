@@ -36,27 +36,46 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
       - uses: google-github-actions/setup-gcloud@v2
+      - name: Read configured NIA transport
+        run: |
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/nia-service.json
+          TRANSPORT=$(python -c 'import json; s=json.load(open("/tmp/nia-service.json")); e=s["spec"]["template"]["spec"]["containers"][0].get("env", []); print(next((v.get("value", "http") for v in e if v["name"] == "NIA_TRANSPORT"), "http"))')
+          case "$TRANSPORT" in http|grpc) ;; *) echo 'Invalid NIA_TRANSPORT'; exit 1 ;; esac
+          echo "NIA_TRANSPORT=$TRANSPORT" >> "$GITHUB_ENV"
       - name: Configure Docker authentication
         run: gcloud auth configure-docker "$REGISTRY" --quiet
       - name: Compute immutable image tag
         run: echo "IMAGE_URI=$REGISTRY/$PROJECT_ID/$AR_REPO/$IMAGE_NAME:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       - name: Build and push
         run: |
-          docker build -t "$IMAGE_URI" .
+          docker build --no-cache -t "$IMAGE_URI" .
           docker push "$IMAGE_URI"
       - name: Deploy initial public Cloud Run service
         run: |
+          TRANSPORT_FLAGS=()
+          if [ "$NIA_TRANSPORT" = grpc ]; then
+            TRANSPORT_FLAGS+=(--use-http2 --startup-probe=tcpSocket.port=8080,timeoutSeconds=1,periodSeconds=10,failureThreshold=24)
+          else
+            TRANSPORT_FLAGS+=(--no-use-http2)
+          fi
           gcloud run deploy "$CLOUD_RUN_SERVICE" \
             --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE_URI" \
             --ingress all --allow-unauthenticated \
             --min-instances 1 --max-instances 3 --cpu 1 --memory 1Gi --port 8080 \
-            --timeout 300 --quiet
+            --timeout 300 "${TRANSPORT_FLAGS[@]}" --quiet
       - name: Verify Cloud Run revision readiness
         run: |
           gcloud run services describe "$CLOUD_RUN_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/service.json
           python -c 'import json; s=json.load(open("/tmp/service.json"))["status"]; assert any(c["type"] == "Ready" and c["status"] == "True" for c in s["conditions"]); assert s["latestReadyRevisionName"] == s["latestCreatedRevisionName"]'
       - name: Check public health endpoint
+        if: env.NIA_TRANSPORT == 'http'
         run: |
           SERVICE_URL=$(gcloud run services describe "$CLOUD_RUN_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')
           curl --fail --silent --show-error --retry 5 --retry-all-errors "$SERVICE_URL/health" > /tmp/health.json
           python -c 'import json; assert json.load(open("/tmp/health.json"))["status"] == "ok"'
+      - name: Check public gRPC health endpoint
+        if: env.NIA_TRANSPORT == 'grpc'
+        run: |
+          python -m pip install grpcio==1.83.0 protobuf==6.33.6
+          SERVICE_URL=$(gcloud run services describe "$CLOUD_RUN_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')
+          python -m app.grpc_api.probe --target "${SERVICE_URL#https://}:443"

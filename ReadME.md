@@ -1,5 +1,7 @@
 # NIA API
 
+Go chat adapter, feature flag, and gRPC setup: [docs/GRPC_INTEGRATION.md](docs/GRPC_INTEGRATION.md).
+
 FastAPI service for the NIA research assistant. It plans a question against one selected list, reads the current authorized rows through `assistant_api`, and returns the answer. Text and voice use the same core.
 
 The runtime connects as `assistant_runtime`. Research rows are read only through `assistant_api` functions. Production startup runs a privilege self-test and refuses to boot if that role can read website auth tables.

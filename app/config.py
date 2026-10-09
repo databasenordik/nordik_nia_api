@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
+    nia_transport: Literal["http", "grpc"] = "http"
+    nia_grpc_principal_id: str = ""
+    nia_grpc_allowed_file_ids: str = "49,91"
+    nia_grpc_can_use_private_files: bool = False
     frontend_origin: str = "http://localhost:3000"
     cors_origins: str = "http://localhost:3000"
 

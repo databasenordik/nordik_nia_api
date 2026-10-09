@@ -600,7 +600,17 @@ class AssistantDataGateway:
         query: str,
         method: str,
         limit: int = 20,
+        *,
+        predicates: list[Predicate] | None = None,
     ) -> list[dict[str, Any]]:
+        if predicates:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT * FROM assistant_api.retrieve_candidates($1, $2::int[], $3, $4, $5, $6, $7::jsonb)",
+                    scope.principal_id, list(file_ids), scope.can_use_private_files,
+                    query, method, limit, json.dumps(_filters_payload(predicates)),
+                )
+            return [_gateway_row(row) for row in rows]
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
