@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+# Pinned through Artifact Registry's Docker Hub remote cache so CI does not
+# depend on Docker Hub availability for this base image.
+ARG PYTHON_BASE_IMAGE=us-west1-docker.pkg.dev/planar-ray-472112-e8/docker-hub-cache/python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+FROM ${PYTHON_BASE_IMAGE}
 
 WORKDIR /app
 COPY pyproject.toml ./

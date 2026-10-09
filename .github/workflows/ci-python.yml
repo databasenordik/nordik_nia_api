@@ -8,6 +8,11 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+
+env:
+  ARTIFACT_REGISTRY_HOST: us-west1-docker.pkg.dev
+  PYTHON_BASE_IMAGE: us-west1-docker.pkg.dev/planar-ray-472112-e8/docker-hub-cache/python@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 
 jobs:
   test:
@@ -26,9 +31,28 @@ jobs:
           python -m pip install --no-deps .
       - name: Tests
         run: python -m pytest tests -q
+      - id: gcp-auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Docker authentication for Artifact Registry
+        run: gcloud auth configure-docker "$ARTIFACT_REGISTRY_HOST" --quiet
+      - name: Pull cached Python base image with retry
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if docker pull "$PYTHON_BASE_IMAGE"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
       - name: Build and smoke test the deployment image
         run: |
-          docker build -t nia-ci .
+          docker build --pull=false --build-arg PYTHON_BASE_IMAGE="$PYTHON_BASE_IMAGE" -t nia-ci .
           docker run -d --name nia-ci -p 8080:8080 -e PORT=8080 -e APP_ENV=development -e ASSISTANT_DATABASE_URL=postgresql://unused:unused@127.0.0.1:1/unused nia-ci
           trap 'docker logs nia-ci; docker rm -f nia-ci' EXIT
           for attempt in $(seq 1 30); do
