@@ -39,3 +39,14 @@ jobs:
             sleep 2
           done
           exit 1
+      - name: Smoke test the gRPC deployment mode
+        run: |
+          docker run -d --name nia-grpc-ci -e PORT=8080 -e APP_ENV=development -e NIA_TRANSPORT=grpc -e NIA_GRPC_PRINCIPAL_ID=ci-fixture -e PLANNER_MODE=legacy -e REASONING_PROVIDER=fake -e ASSISTANT_DATABASE_URL=postgresql://unused:unused@127.0.0.1:1/unused nia-ci
+          trap 'docker logs nia-grpc-ci; docker rm -f nia-grpc-ci' EXIT
+          for attempt in $(seq 1 10); do
+            if docker exec nia-grpc-ci python -m app.grpc_api.probe --target 127.0.0.1:8080 --plaintext --question 'How many records are in this list?'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1

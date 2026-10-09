@@ -663,13 +663,16 @@ class MemoryDataGateway:
         query: str,
         method: str,
         limit: int = 20,
+        *,
+        predicates: list[Predicate] | None = None,
     ) -> list[dict[str, Any]]:
         self.calls.append(method)
         delay = self.method_delays.get(method)
         if delay:
             await asyncio.sleep(delay)
         allowed = self._allowed_file_ids(scope, file_ids)
-        return [record for record in self._records if int(record["file_id"]) in allowed][: max(limit * 4, 20)]
+        rows = apply_predicates(self._records, predicates or [], self._catalog, tuple(allowed))
+        return rows[: max(limit * 4, 20)]
 
     async def get_raw_fields(
         self,

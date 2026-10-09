@@ -253,6 +253,8 @@ class DataGateway(Protocol):
         query: str,
         method: str,
         limit: int = 20,
+        *,
+        predicates: list[Predicate] | None = None,
     ) -> list[dict[str, Any]]: ...
 
     async def get_raw_fields(
