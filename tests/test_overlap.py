@@ -3,7 +3,7 @@
 Asked about families with several children at the school "during the same period", NIA ranked
 parents' names by record count: siblings a decade apart counted exactly like siblings who overlapped.
 These tests pin the comparison of periods, on invented families, including the dates that cannot
-be placed -- a year alone covers the whole year, two admissions in one cell are not guessed at, and
+be placed -- partial dates establish only guaranteed presence, two admissions are not guessed at, and
 the answer says how many groups could not be checked.
 """
 
@@ -63,7 +63,7 @@ def _rows():
         # Two children, but one date cell holds two admissions and cannot be placed.
         _row(6, "Fay Dunn", "Lena Dunn", _exact("1930-09-01"), _exact("1934-06-30")),
         _row(7, "Gus Dunn", "Lena Dunn", {"raw": "1931 and 1933", "kind": "range"}, _exact("1935-06-30")),
-        # A year alone covers the whole year, so these two overlap.
+        # Discharge in 1922 may precede Ivy's November arrival: overlap is not proven.
         _row(8, "Hal Elm", "Ida Elm", _year(1920), _year(1922)),
         _row(9, "Ivy Elm", "Ida Elm", _exact("1922-11-01"), _exact("1925-06-30")),
         # Only one child.
@@ -86,7 +86,7 @@ def test_only_members_present_at_the_same_time_count():
     result = _compare()
     assert result.shared == 4
     assert result.checkable == 3
-    assert [group.value for group in result.groups] == ["Ida Elm", "Mary and John Birch"]
+    assert [group.value for group in result.groups] == ["Mary and John Birch"]
     birch = next(group for group in result.groups if group.value == "Mary and John Birch")
     assert [stay.name for stay in birch.together] == ["Ann Birch", "Ben Birch"]
     assert (birch.first.isoformat(), birch.last.isoformat()) == ("1952-09-01", "1953-06-30")
@@ -110,9 +110,18 @@ def test_back_to_back_periods_do_not_overlap():
     assert all(group.value != "Rose Cedar" for group in _compare().groups)
 
 
-def test_a_year_alone_covers_the_whole_year():
-    elm = next(group for group in _compare().groups if group.value == "Ida Elm")
-    assert elm.first.year == 1922
+def test_a_partial_discharge_year_does_not_prove_presence_until_december():
+    assert all(group.value != "Ida Elm" for group in _compare().groups)
+
+
+def test_partial_dates_can_still_prove_overlap_inside_their_guaranteed_period():
+    rows = [
+        _row(1, "Hal Elm", "Ida Elm", _year(1920), _year(1922)),
+        _row(2, "Ivy Elm", "Ida Elm", _exact("1921-06-01"), _exact("1925-06-30")),
+    ]
+    [elm] = _compare(rows).groups
+    assert elm.first.isoformat() == "1921-06-01"
+    assert elm.last.isoformat() == "1922-01-01"
 
 
 def test_asking_for_more_at_once_raises_the_bar():
@@ -175,6 +184,6 @@ def test_the_answer_says_how_much_could_be_checked_and_who_overlapped():
     )
     assert result.status == "answered"
     assert "**4** values of **Parents names** are each shared by 2 or more students" in result.answer
-    assert "For **3** of them" in result.answer and "in **2** of those" in result.answer
+    assert "For **3** of them" in result.answer and "in **1** of those" in result.answer
     assert "The other **1** cannot be checked" in result.answer
     assert "| Mary and John Birch | 2 of 3 | Ann Birch (1950–1953); Ben Birch (1952–1956) | 1952–1953 |" in result.answer

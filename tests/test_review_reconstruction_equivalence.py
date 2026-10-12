@@ -68,6 +68,46 @@ async def _plan(question: str, provider: FakeReasoningProvider):
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair", [True, False])
+async def test_complete_cannot_approve_a_trusted_goal_contradiction(ai_settings, repair):
+    primary = _turn({"goal": "count"}, [_req("goal", goal="count")])
+    approval = {"verdict": "complete", "reconstructed_requirements": [_req("goal", goal="count")]}
+    requirements = [_req("goal", goal="aggregate"),
+                    _req("aggregate", function="count_distinct", field="community")]
+    corrected = _turn({"goal": "aggregate", "aggregate": {"function": "count_distinct", "field": "community"}}, requirements)
+    provider = FakeReasoningProvider()
+    provider.structured_queue = [primary, approval,
+        {"verdict": "corrected", "missing": ["distinct count"], "plan": corrected.model_dump(),
+         "reconstructed_requirements": requirements} if repair else approval]
+    result = await _plan("How many distinct communities are recorded?", provider)
+    assert result.planner_total_model_calls == 3
+    if repair:
+        assert result.status == "planned"
+        assert any(step.op.value == "COUNT_DISTINCT" for step in result.plan.steps)
+    else:
+        assert result.plan is None
+        assert result.status == "clarification"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair", [True, False])
+async def test_correction_that_keeps_a_goal_contradiction_has_one_bounded_repair(ai_settings, repair):
+    primary = _turn({"goal": "count"}, [_req("goal", goal="count")])
+    wrong = {"verdict": "corrected", "missing": ["distinct count"], "plan": primary.model_dump(),
+             "reconstructed_requirements": [_req("goal", goal="count")]}
+    requirements = [_req("goal", goal="aggregate"),
+                    _req("aggregate", function="count_distinct", field="community")]
+    corrected = _turn({"goal": "aggregate", "aggregate": {"function": "count_distinct", "field": "community"}}, requirements)
+    provider = FakeReasoningProvider()
+    provider.structured_queue = [primary, wrong,
+        {"verdict": "corrected", "missing": ["distinct count"], "plan": corrected.model_dump(),
+         "reconstructed_requirements": requirements} if repair else wrong]
+    result = await _plan("How many distinct communities are recorded?", provider)
+    assert result.planner_total_model_calls == 3
+    assert result.status == ("planned" if repair else "clarification")
+
+
 def _check(action: dict, reconstructed: list[dict]):
     turn = _turn(action, [_req("goal", goal=action["goal"])])
     parsed = PlannedTurn.model_validate(
@@ -440,6 +480,46 @@ async def test_a_correction_cannot_answer_an_absent_field_from_a_different_one(a
 
     assert result.status in {"unsupported_fields", "clarification"}
     assert result.plan is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair", [True, False])
+async def test_independent_reconstruction_retry_is_bounded(ai_settings, repair):
+    filt = {"field": "community", "operator": "EQUALS", "value": "Garden River"}
+    primary = _turn({"goal": "count", "filters": [filt]},
+        [_req("goal", goal="count"), _req("filter", collection="filters", **filt)])
+    bad = {"verdict": "complete", "reconstructed_requirements": [_req("goal", goal="count")]}
+    good = {"verdict": "complete", "reconstructed_requirements": [
+        _req("goal", goal="count"), _req("filter", collection="filters", **filt)]}
+    provider = FakeReasoningProvider()
+    provider.structured_queue = [primary, bad, good if repair else bad]
+    result = await _plan("How many students are from Garden River?", provider)
+    assert result.status == ("planned" if repair else "clarification")
+    assert result.review_attempts == 2
+    assert result.planner_total_model_calls == 3
+    assert result.review_status == ("repaired_reconstruction" if repair else "inconsistent")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair", [True, False])
+async def test_review_action_index_retry_preserves_requirements(ai_settings, repair):
+    primary = _turn({"goal": "count"}, [_req("goal", goal="count")])
+    malformed = primary.model_dump(mode="json")
+    malformed["stated_requirements"][0]["action_index"] = 1
+    bad_review = {
+        "verdict": "corrected",
+        "missing": ["correct action index"],
+        "reconstructed_requirements": [_req("goal", goal="count")],
+        "plan": malformed,
+    }
+    provider = FakeReasoningProvider()
+    provider.structured_queue = [primary, bad_review,
+        {"verdict": "complete", "reconstructed_requirements": [_req("goal", goal="count")]}
+        if repair else bad_review]
+    result = await _plan("How many students are there?", provider)
+    assert result.status == ("planned" if repair else "planner_invalid_output")
+    assert result.review_attempts == 2
+    assert result.planner_total_model_calls == 3
 
 
 @pytest.mark.asyncio
@@ -883,7 +963,6 @@ def test_an_unreconstructed_action_restating_another_condition_is_dropped():
 
 def test_a_goal_on_the_extra_count_does_not_keep_a_restated_presence_filter():
     from app.planning.ai_planner import _without_unrequested_context_actions
-
     from app.planning.ai_turn_schema import GoalRequirement
 
     recon = _asked_for_the_count() + [

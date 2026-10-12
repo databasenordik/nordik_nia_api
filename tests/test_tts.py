@@ -17,16 +17,16 @@ from app.memory.store import InMemoryMemoryStore
 from app.realtime.agent import session_options
 from app.realtime.turn_hook import AssistantTurnHook
 from app.security.access_scope import AccessScope
+from app.tts.expressive import add_contextual_voice_tags, strip_voice_tags
 from app.tts.factory import get_tts_provider
 from app.tts.fake import FakeTTSProvider
-from app.tts.expressive import add_contextual_voice_tags, strip_voice_tags
 from app.tts.humanize import humanize_for_speech
 from app.tts.kokoro import KokoroTTSProvider
 from app.tts.livekit_adapter import prepare_speech_text
 from app.tts.phrases import PhraseBuffer, PhraseQueue, SpokenPhrase
 from app.tts.session import BargeInController, SpeechSession
-from app.tts.xai_tts import XAITTSProvider
 from app.tts.voice_control import requested_voice_preference
+from app.tts.xai_tts import XAITTSProvider
 
 
 def _scope() -> AccessScope:

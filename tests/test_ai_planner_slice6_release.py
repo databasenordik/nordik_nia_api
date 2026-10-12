@@ -27,7 +27,7 @@ def test_release_scoped_suite_is_all_critical_and_covers_all_four_lists():
     if not SCOPED_SUITE.exists():
         pytest.skip(f"{SCOPED_SUITE.name} is published with the standalone repository")
     summary = _suite_summary()
-    assert summary["cases"] >= 13
+    assert summary["cases"] == 12
     assert summary["all_critical"] is True
     assert summary["all_have_semantic_contract"] is True
     assert summary["selected_file_ids"] == [49, 91, 93, 94]

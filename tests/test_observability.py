@@ -1,6 +1,6 @@
 import asyncio
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -136,7 +136,7 @@ def test_claim_sql_uses_skip_locked():
 
 
 def test_retention_purges_assistant_state_only():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result_sets = [
         {"created_at": now - timedelta(hours=100), "id": "old"},
         {"created_at": now, "id": "new"},

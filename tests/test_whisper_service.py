@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 # Imports below intentionally follow the local source-path setup.
 # ruff: noqa: E402
-
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -668,7 +668,7 @@ def _format_overlaps(
         f"{scope_text}.",
         f"For **{result.checkable:,}** of them, at least {need} of those {nouns} have "
         f"{_article(start)} {start} and {_article(end)} {end} that place them in time, and in "
-        f"**{len(result.groups):,}** of those, {need} or more were there during the same period.",
+        f"**{len(result.groups):,}** of those, the dates establish that {need} or more were there during the same period.",
     ]
     unchecked = result.shared - result.checkable
     if unchecked:
@@ -766,11 +766,11 @@ def _format_intervals(action: ActionResult, scope_text: str) -> str:
     start, end = action.interval_fields or ("start", "end")
     span = f"{_humanize(start)} to {_humanize(end)}"
     if summary is None and not rows:
-        return f"No record in the {scope_text} has both a {span} date."
+        return f"No record in the {scope_text} has both exact dates for {span}."
     lines: list[str] = []
     if summary is not None and summary.record_count:
         lines.append(
-            f"Across {summary.record_count:,} records in the {scope_text} with both dates, "
+            f"Across {summary.record_count:,} records in the {scope_text} with both exact dates, "
             f"{span} spans: shortest {_format_number(summary.minimum_days)} days, "
             f"longest {_format_number(summary.maximum_days)} days, average "
             f"{_format_number(summary.average_days)} days "

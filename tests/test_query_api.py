@@ -6,6 +6,8 @@ from repo_paths import BACKEND_ROOT  # noqa: E402
 
 sys.path.insert(0, str(BACKEND_ROOT))
 
+from fastapi.testclient import TestClient
+
 from app.api.assistant import (
     QueryRequest,
     _feedback_store,
@@ -13,6 +15,7 @@ from app.api.assistant import (
     _stream_query,
     _turn_service,
 )
+from app.config import Settings
 from app.data_gateway.memory import MemoryDataGateway
 from app.execution.turn import AssistantTurnService, TurnResult
 from app.llm.fake import FakeReasoningProvider
@@ -20,12 +23,10 @@ from app.main import create_app
 from app.memory.feedback import InMemoryFeedbackStore
 from app.memory.store import InMemoryMemoryStore
 from app.security.access_scope import AccessScope
-from app.security.deps import get_access_scope
 from app.security.auth_adapter import get_auth_adapter
+from app.security.deps import get_access_scope
 from app.security.standalone_jwt import StandaloneJwtAuthAdapter
-from app.config import Settings
 from app.tts.base import ensure_no_tts_in_text_mode
-from fastapi.testclient import TestClient
 
 
 def _client(store: InMemoryMemoryStore | None = None) -> TestClient:

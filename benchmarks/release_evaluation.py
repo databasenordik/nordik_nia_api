@@ -39,7 +39,7 @@ from app.security.access_scope import AccessScope
 from benchmarks.planner_efficiency import run as run_efficiency
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = BACKEND_ROOT.parent
+REPO_ROOT = BACKEND_ROOT.parent if BACKEND_ROOT.name == "backend" else BACKEND_ROOT
 SCOPED_SUITE = REPO_ROOT / "docs" / "ai-planner-scoped-suite.json"
 HISTORICAL_LATENCY = REPO_ROOT / "docs" / "latency-optimization-results.md"
 
@@ -196,7 +196,9 @@ async def evaluate(iterations: int) -> dict[str, object]:
             "current_code_database_truth_accuracy": "unmeasured",
             "current_code_provider_latency": "unmeasured",
             "reason": "release evaluation has no live database/provider credentials",
-            "historical_evidence_file": str(HISTORICAL_LATENCY.relative_to(REPO_ROOT)),
+            "historical_evidence_file": (
+                str(HISTORICAL_LATENCY.relative_to(REPO_ROOT)) if HISTORICAL_LATENCY.exists() else None
+            ),
             "historical_evidence_is_not_current_qualification": True,
         },
     }

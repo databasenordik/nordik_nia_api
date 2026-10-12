@@ -82,6 +82,7 @@ class ConversationRecord(BaseModel):
     result_sets: dict[str, ResultSet] = Field(default_factory=dict)
     recent_turns: list[dict[str, Any]] = Field(default_factory=list)
     rolling_summary: str = ""
+    row_access_revision: str | None = None
     last_action_keys: list[str] = Field(default_factory=list)
     user_display_name: str | None = None
     message_sequence: int = Field(default=0, ge=0)

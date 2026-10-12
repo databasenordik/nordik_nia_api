@@ -1,21 +1,20 @@
 """Write parsed name parts into canonical.name_parts for every authorized list.
 
-Reads the as-recorded name cells, runs ``name_parser`` over them, and stores the result
+Reads the declared name cells, interprets Name comments, and stores the result
 under ``row_data_normalized.canonical.name_parts``. Originals are never touched -- this
 only adds a sibling object -- so every displayed name and citation still shows exactly
 what the source recorded.
 
 Idempotent: re-running recomputes from the source cells and replaces the block. The
-Master List is regenerated from raw source cells and parser rules by default; stored
-name overrides are not used for it unless explicitly requested. Other lists retain
-their existing override behavior.
+four lists are regenerated from standardized source cells by default. Stored name
+overrides are used only when explicitly requested.
 
 Usage (from the backend container)::
 
     python -m app.normalization.backfill_names            # all four lists
     python -m app.normalization.backfill_names --file-id 49
     python -m app.normalization.backfill_names --dry-run  # report coverage only
-    python -m app.normalization.backfill_names --use-master-name-overrides  # opt-in
+    python -m app.normalization.backfill_names --use-name-overrides  # opt-in
     python -m app.normalization.backfill_names --file-id 49 --only-name-issues"""
 
 from __future__ import annotations
@@ -24,23 +23,23 @@ import argparse
 import asyncio
 import json
 import re
+from dataclasses import replace
 from typing import Any
 
 import asyncpg
 
 from app.config import get_settings
+from app.normalization.date_expression import recorded_event_count, shared_component
 from app.normalization.date_parser import parse_date
 from app.normalization.name_parser import (
     NameParts,
     master_parts_match_clean_source,
-    parse_full_name,
-    parse_master,
+    merge_name_comments,
     place_from_residue,
 )
 
-# Lists whose given/middle/surname already sit in their own source cells. Everything else
-# packs the whole name into one cell.
-SPLIT_NAME_FILES = frozenset({49})
+# All supported lists have separate given, middle, and surname source cells.
+SPLIT_NAME_FILES = frozenset({49, 91, 93, 94})
 DEFAULT_FILES = (49, 91, 93, 94)
 
 # canonical.name_parts key -> the NameParts attribute it stores.
@@ -107,7 +106,8 @@ def _source_cell(
     for path in sources.get(semantic_field, []):
         if raw_only and not path.startswith("fields."):
             continue
-        text = _as_text(_at(blob, path))
+        node = _at(blob, path)
+        text = _as_text(node.get("raw") if raw_only and isinstance(node, dict) else node)
         if text:
             return text
     return ""
@@ -138,21 +138,28 @@ def _as_text(node: Any) -> str:
 
 
 def parts_for_row(row: dict[str, Any], file_id: int, sources: dict[str, list[str]]) -> NameParts:
-    if file_id in SPLIT_NAME_FILES:
-        return parse_master(
-            # Master regeneration is intentionally raw-only. Canonical values are parser
-            # outputs and must never become inputs to a later normalization run.
-            first=_source_cell(row, "first_name_source", sources, raw_only=True),
-            middle=_source_cell(row, "middle_names_source", sources, raw_only=True),
-            last=_source_cell(row, "last_name_source", sources, raw_only=True),
-            indigenous=_source_cell(row, "indigenous_name", sources, raw_only=True),
-            # The standardized Master list keeps name variants, Indigenous names and
-            # their meanings in a comments column instead of inside the name cells.
-            comments=_source_cell(row, "name_comments", sources, raw_only=True),
-        )
-    return parse_full_name(
-        full=_source_cell(row, "student_name", sources),
-        indigenous=_source_cell(row, "indigenous_name", sources),
+    middle = _source_cell(row, "middle_names_source", sources, raw_only=True)
+    base = NameParts(
+        # Declared slots are authoritative, including compound given names and surnames.
+        first=_source_cell(row, "first_name_source", sources, raw_only=True),
+        middle=(middle,) if middle else (),
+        last=_source_cell(row, "last_name_source", sources, raw_only=True),
+        indigenous=_source_cell(row, "indigenous_name", sources, raw_only=True),
+    )
+    enriched = merge_name_comments(base, _source_cell(row, "name_comments", sources, raw_only=True))
+    # Comments can record additional given-name variants, but cannot rewrite the
+    # person's standardized Middle Name cell.
+    return replace(
+        enriched,
+        middle=base.middle,
+        extra_first=tuple(
+            dict.fromkeys(
+                (
+                    *enriched.extra_first,
+                    *(value for value in enriched.middle if value not in base.middle),
+                )
+            )
+        ),
     )
 
 
@@ -191,6 +198,7 @@ def apply_community(
     parts: NameParts,
     *,
     derive: bool,
+    authoritative: bool = False,
 ) -> str | None:
     """Keep canonical.community in step with the row; return the folded column value to write.
 
@@ -201,6 +209,10 @@ def apply_community(
     Returns None to leave canonical_community as ingest wrote it, "" to clear a value an
     earlier run derived, or the folded place when one is derived now.
     """
+    if authoritative:
+        canonical.pop("community_source", None)
+        canonical["community"] = recorded
+        return fold_label(recorded)
     if recorded:
         if canonical.get("community_source") == "name_cell":
             canonical.pop("community_source", None)
@@ -232,11 +244,9 @@ def date_block(row: dict[str, Any], date_fields: list[str], sources: dict[str, l
     """
     block: dict[str, dict[str, Any]] = {}
     for semantic_field in date_fields:
-        raw = _source_cell(row, semantic_field, sources)
-        if not raw:
-            continue
+        raw = _source_cell(row, semantic_field, sources, raw_only=True)
         parts = parse_date(raw)
-        entry: dict[str, Any] = {}
+        entry: dict[str, Any] = {"event_count": recorded_event_count(raw)}
         if parts.year is not None:
             entry["year"] = parts.year
         if parts.month is not None:
@@ -244,13 +254,32 @@ def date_block(row: dict[str, Any], date_fields: list[str], sources: dict[str, l
         if parts.day is not None:
             entry["day"] = parts.day
         if parts.iso:
-            entry["iso"] = parts.iso
+            entry["iso"] = raw if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw) else parts.iso
         if parts.precision:
             entry["precision"] = parts.precision
         if parts.extra:
             entry["extra"] = "; ".join(parts.extra)
         if parts.flags:
             entry["flags"] = "; ".join(parts.flags)
+        if any(operator in raw for operator in ("|", "&", ":")) or "alternative" in parts.flags:
+            entry["iso"] = raw
+            entry["expression"] = raw
+            entry["mode"] = (
+                "mixed"
+                if sum(operator in raw for operator in ("|", "&", ":")) > 1
+                else "range"
+                if ":" in raw
+                else "or"
+                if "alternative" in parts.flags and "&" not in raw
+                else "and"
+                if "&" in raw and "|" not in raw
+                else "mixed"
+            )
+            for component in ("year", "month", "day"):
+                shared = shared_component(raw, component)
+                entry.pop(component, None)
+                if shared is not None:
+                    entry[component] = shared
         if entry:
             block[semantic_field] = entry
     return block
@@ -311,12 +340,10 @@ async def run(
 
             rows = await conn.fetch(
                 """
-                SELECT n.id, n.source_row_id, n.row_data_normalized
-                FROM public.file_data_normalized n
-                JOIN public.file f ON f.id = n.file_id AND f.version = n.version
+                SELECT n.id, n.source_row_id, n.row_data_normalized, n.canonical_name,
+                       n.canonical_community, n.search_text
+                FROM assistant_api.v_current_records n
                 WHERE n.file_id = $1
-                  AND n.status = 'ready'
-                  AND COALESCE(f.is_delete, false) = false
                 ORDER BY n.source_row_id, n.id
                 """,
                 file_id,
@@ -324,11 +351,14 @@ async def run(
             overrides = {
                 r["source_row_id"]: dict(r)
                 for r in await conn.fetch(
-                    "SELECT * FROM assistant.name_overrides WHERE file_id = $1", file_id
+                    "SELECT o.* FROM assistant.name_overrides o "
+                    "JOIN assistant_api.v_current_records n ON n.file_id = o.file_id "
+                    "AND n.source_row_id = o.source_row_id WHERE o.file_id = $1",
+                    file_id,
                 )
             }
 
-            updates: list[tuple[int, str, str | None]] = []
+            updates: list[tuple[int, str, str | None, str, str]] = []
             named = flagged = curated = derived_communities = 0
             dated = imprecise = multi = 0
             skipped_clean = 0
@@ -338,7 +368,6 @@ async def run(
                 if isinstance(payload, str):
                     payload = json.loads(payload)
                 row["row_data_normalized"] = payload or {}
-
 
                 parts = parts_for_row(row, file_id, sources)
 
@@ -362,9 +391,8 @@ async def run(
                         skipped_clean += 1
                         continue
 
-                # Master rows are parser-only by default so a successful regeneration
-                # cannot be masked by historical manual overrides. Overrides remain the
-                # default for the other lists and can be explicitly re-enabled for Master.
+                # Standardized source cells are authoritative unless overrides are
+                # explicitly requested for a curation run.
                 override = overrides.get(row["source_row_id"])
                 if file_id in SPLIT_NAME_FILES and not use_master_name_overrides:
                     override = None
@@ -377,6 +405,13 @@ async def run(
                     curated += 1
                 canonical = dict(row["row_data_normalized"].get("canonical") or {})
                 canonical["name_parts"] = block
+                display_name = " ".join(
+                    value for value in (parts.first, " ".join(parts.middle), parts.last) if value
+                )
+                canonical["first_name"] = parts.first
+                canonical["middle_names"] = " ".join(parts.middle)
+                canonical["last_name"] = parts.last
+                canonical["display_name"] = display_name
                 column_update: str | None = None
                 if community_path == "canonical.community" and not only_name_issues:
                     # A list whose names sit in their own cells has no whole row pasted into
@@ -386,16 +421,19 @@ async def run(
                         _source_cell(row, "community", sources, raw_only=True),
                         parts,
                         derive=file_id not in SPLIT_NAME_FILES,
+                        authoritative=file_id in SPLIT_NAME_FILES,
                     )
                     if canonical.get("community_source") == "name_cell":
                         derived_communities += 1
                 if not only_name_issues:
                     dates = date_block(row, date_fields, sources)
+                    canonical["date_parts"] = dates
                     if dates:
-                        canonical["date_parts"] = dates
                         dated += sum(1 for entry in dates.values() if entry.get("year"))
                         imprecise += sum(
-                            1 for entry in dates.values() if entry.get("precision") != "day"
+                            1
+                            for entry in dates.values()
+                            if entry.get("iso") and entry.get("precision") != "day"
                         )
                         multi += sum(1 for entry in dates.values() if entry.get("extra"))
                 merged = dict(row["row_data_normalized"])
@@ -420,9 +458,24 @@ async def run(
                 # inspected.  Only persist a row when normalization actually changes the
                 # stored JSON payload.  This is what keeps already-clean single-word names
                 # untouched without any reference list or expected row count.
-                if merged != row["row_data_normalized"]:
+                folded_name = fold_label(display_name)
+                search_text = " ".join(
+                    _as_text(value) for value in (merged.get("fields") or {}).values()
+                )
+                if (
+                    merged != row["row_data_normalized"]
+                    or folded_name != (row.get("canonical_name") or "")
+                    or search_text != (row.get("search_text") or "")
+                    or (column_update is not None and column_update != (row.get("canonical_community") or ""))
+                ):
                     updates.append(
-                        (row["id"], json.dumps(merged, ensure_ascii=False), column_update)
+                        (
+                            row["id"],
+                            json.dumps(merged, ensure_ascii=False),
+                            column_update,
+                            folded_name,
+                            search_text,
+                        )
                     )
 
             total = len(rows)
@@ -449,17 +502,14 @@ async def run(
                     "UPDATE public.file_data_normalized SET row_data_normalized = $2::jsonb, "
                     "canonical_community = CASE WHEN $3::text IS NULL THEN canonical_community "
                     "ELSE NULLIF($3::text, '') END "
+                    ", canonical_name = NULLIF($4::text, ''), search_text = $5 "
                     "WHERE id = $1",
                     updates,
                 )
             print(f"  wrote {len(updates)} rows")
         if not dry_run:
-            try:
-                # Fill rates tell the planner which field holds a value; a community just
-                # derived changes that for its list.
-                await conn.execute("SELECT assistant.refresh_fill_rates()")
-            except asyncpg.PostgresError as exc:
-                print(f"fill rates not refreshed: {exc}")
+            await conn.execute("SELECT assistant.refresh_fill_rates()")
+            await conn.execute("SELECT assistant.refresh_recorded_values()")
     finally:
         await conn.close()
 
@@ -474,10 +524,12 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="report coverage, write nothing")
     parser.add_argument(
         "--use-master-name-overrides",
+        "--use-name-overrides",
+        dest="use_master_name_overrides",
         action="store_true",
         help=(
-            "opt in to assistant.name_overrides for Master List rows; by default Master "
-            "is regenerated from raw source cells and parser rules only"
+            "opt in to assistant.name_overrides for all four lists; by default names "
+            "are regenerated from standardized source cells only"
         ),
     )
     parser.add_argument(

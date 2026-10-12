@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = BACKEND_ROOT.parent
+REPO_ROOT = BACKEND_ROOT.parent if BACKEND_ROOT.name == "backend" else BACKEND_ROOT
 
 
 def _run(command: list[str], *, cwd: Path, env: dict[str, str]) -> dict[str, object]:
@@ -47,8 +47,9 @@ def main() -> int:
         env["PYTHONPATH"] = backend_text + (os.pathsep + current if current else "")
 
     steps: dict[str, dict[str, object]] = {}
+    program_paths = [str(BACKEND_ROOT / "app"), str(BACKEND_ROOT / "benchmarks"), str(REPO_ROOT / "tests")]
     steps["compileall"] = _run(
-        [sys.executable, "-m", "compileall", "-q", "backend/app", "backend/benchmarks", "tests"],
+        [sys.executable, "-m", "compileall", "-q", *program_paths],
         cwd=REPO_ROOT,
         env=env,
     )
@@ -67,13 +68,13 @@ def main() -> int:
     ruff = shutil.which("ruff")
     if ruff:
         steps["ruff"] = _run(
-            [ruff, "check", "backend/app", "backend/benchmarks", "tests"],
+            [ruff, "check", *program_paths],
             cwd=REPO_ROOT,
             env=env,
         )
     else:
         steps["ruff"] = {
-            "command": ["ruff", "check", "backend/app", "backend/benchmarks", "tests"],
+            "command": ["ruff", "check", *program_paths],
             "exit_code": None,
             "stdout": "",
             "stderr": "Ruff is not installed; lint gate not executed.",

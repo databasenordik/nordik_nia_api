@@ -13,7 +13,6 @@ from app.planning.deterministic_parser import parse_deterministic
 from app.planning.plan_validator import validate_query_plan
 from app.security.access_scope import AccessScope
 
-
 GOLDEN = "How many students have names starting with S?"
 
 

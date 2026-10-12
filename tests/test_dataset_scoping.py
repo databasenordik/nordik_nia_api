@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.data_gateway.memory import MemoryDataGateway
 from app.execution.filters import predicate_matches
-from app.execution.turn import AssistantTurnService
+from app.execution.turn import AssistantTurnService, _field_dataset_suggestion
 from app.llm.fake import FakeReasoningProvider
 from app.memory.store import InMemoryMemoryStore
 from app.memory.types import ConversationRecord
@@ -15,7 +15,6 @@ from app.planning.plan_schema import FilterOperator, Predicate
 from app.planning.trusted_overrides import apply_trusted_overrides
 from app.planning.turn_schema import QueryAction, TurnPlan
 from app.security.access_scope import AccessScope
-from app.execution.turn import _field_dataset_suggestion
 from app.security.livekit_token import (
     decode_livekit_token,
     mint_livekit_token,

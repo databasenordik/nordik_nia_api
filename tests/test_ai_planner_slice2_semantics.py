@@ -26,7 +26,7 @@ from app.planning.ai_planner import (
     authorized_dataset_options,
     plan_user_turn_ai,
 )
-from app.planning.ai_turn_schema import PlanReviewResponse, PlannedTurn, bind_scope
+from app.planning.ai_turn_schema import PlannedTurn, PlanReviewResponse, bind_scope
 from app.planning.catalog import static_catalog
 from app.planning.conversation_resolver import ConversationContext
 from app.planning.predicate_contract import validate_predicate_contract
@@ -161,7 +161,7 @@ async def test_complete_review_cannot_omit_a_candidate_filter(ai_settings):
     filt = {"field": "community", "operator": "EQUALS", "value": "Garden River"}
     primary = _count_plan(filters=[filt], stated_filters=[filt])
     provider = FakeReasoningProvider()
-    provider.structured_queue = [primary, _complete([_goal_requirement()])]
+    provider.structured_queue = [primary, _complete([_goal_requirement()]), _complete([_goal_requirement()])]
 
     result = await _plan("How many students are from Garden River?", provider)
 
@@ -182,6 +182,7 @@ async def test_complete_review_cannot_reconstruct_a_filter_the_candidate_dropped
                 _filter_requirement("community", "EQUALS", "Garden River"),
             ]
         ),
+        _complete([_goal_requirement(), _filter_requirement("community", "EQUALS", "Garden River")]),
     ]
 
     result = await _plan("How many students are from Garden River?", provider)
@@ -205,13 +206,19 @@ async def test_review_correction_cannot_introduce_unreconstructed_narrowing(ai_s
             "reconstructed_requirements": [_goal_requirement()],
             "plan": corrected.model_dump(mode="json"),
         },
+        {
+            "verdict": "corrected",
+            "missing": ["community"],
+            "reconstructed_requirements": [_goal_requirement()],
+            "plan": corrected.model_dump(mode="json"),
+        },
     ]
 
     result = await _plan("How many students are from Garden River?", provider)
 
     assert result.status == "clarification"
     assert result.plan is None
-    assert result.planner_total_model_calls == 2
+    assert result.planner_total_model_calls == 3
 
 
 @pytest.mark.asyncio

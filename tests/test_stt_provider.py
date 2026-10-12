@@ -4,7 +4,6 @@ from pathlib import Path
 
 # Imports below intentionally follow the local source-path setup.
 # ruff: noqa: E402
-
 import pytest
 
 from repo_paths import BACKEND_ROOT

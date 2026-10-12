@@ -23,6 +23,7 @@ from app.planning.requirement_parity import (
     check_requirement_parity,
     requirements_not_reconstructed,
 )
+from app.planning.trusted_overrides import _apply_random_sample, _bare_research_dump
 from app.planning.turn_schema import (
     ActiveQuery,
     AggregateSpec,
@@ -34,7 +35,6 @@ from app.planning.turn_schema import (
     TurnPlan,
     VerifyPreviousAction,
 )
-from app.planning.trusted_overrides import _apply_random_sample, _bare_research_dump
 from app.planning.turn_validator import validate_turn_plan
 from app.security.access_scope import AccessScope
 

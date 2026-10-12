@@ -11,6 +11,9 @@ import re
 from datetime import date
 from typing import Any
 
+from app.normalization.date_expression import bounds, shared_component
+from app.normalization.date_parser import parse_date as parse_parts
+
 _YEAR = re.compile(r"(1[6-9]\d{2}|20\d{2})")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 _ISO = re.compile(r"(1[6-9]\d{2}|20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})")
@@ -32,6 +35,11 @@ def value_part(value: Any, part: str | None) -> str | None:
     if part in (None, "raw"):
         return text
     if part in {"year", "decade"}:
+        if any(op in text for op in ("|", "&", ":")) or re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}", text):
+            year = shared_component(text, "year")
+            if year is None:
+                return None
+            return str(year) if part == "year" else f"{year // 10 * 10}s"
         match = _YEAR.search(text)
         if match is None:
             return None
@@ -61,6 +69,13 @@ def numeric_value(value: Any, part: str | None = None) -> float | None:
     text = "" if value is None else str(value).strip()
     if not text:
         return None
+    if part is None and re.match(r"^\d{4}-\d{2}-\d{2}", text):
+        year = shared_component(text, "year")
+        return float(year) if year is not None else None
+    if part in {"year", "decade"} and (any(op in text for op in ("|", "&", ":"))
+            or re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}", text)):
+        year = shared_component(text, "year")
+        return float(year) if year is not None else None
     match = _YEAR.search(text) if part in {"year", "decade"} else _NUMBER.search(text)
     if match is None:
         return None
@@ -75,6 +90,11 @@ def parse_date(value: Any) -> date | None:
     text = "" if value is None else str(value).strip()
     if not text:
         return None
+    if any(op in text for op in ("|", "&", ":")) or re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}", text):
+        return None
+    if re.fullmatch(r"\d{4}(?:-\d{2}(?:-\d{2})?)?", text):
+        interval = bounds(parse_parts(text))
+        return interval[0] if interval else None
     match = _ISO.search(text)
     if match:
         return _safe_date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
@@ -95,6 +115,11 @@ def date_precision(value: Any) -> str | None:
     text = "" if value is None else str(value).strip()
     if not text:
         return None
+    if any(op in text for op in ("|", "&", ":")) or re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}", text):
+        return None
+    if re.fullmatch(r"\d{4}(?:-\d{2}(?:-\d{2})?)?", text):
+        parts = parse_parts(text)
+        return parts.precision if bounds(parts) else None
     if _ISO.search(text) or _DAY_FIRST.search(text):
         return "month" if _ZERO_PART.search(text) else "day"
     if _YEAR_MONTH.search(text) or _MONTH_NAME_YEAR.search(text):

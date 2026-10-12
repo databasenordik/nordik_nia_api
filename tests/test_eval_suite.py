@@ -5,6 +5,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from eval_fixtures import EVAL_CASES, UNAUTHORIZED_SOURCES, EvalCase
+
 from app.concurrency.limits import ResourceLimits
 from app.data_gateway.memory import MemoryDataGateway
 from app.execution.executor import QueryExecutor
@@ -18,8 +20,6 @@ from app.planning.deterministic_parser import parse_deterministic
 from app.planning.plan_validator import PlanValidationError, validate_query_plan
 from app.retrieval.types import EvidenceItem, EvidencePacket
 from app.security.access_scope import AccessScope
-
-from eval_fixtures import EVAL_CASES, UNAUTHORIZED_SOURCES, EvalCase
 
 
 def _scope(case: EvalCase) -> AccessScope:

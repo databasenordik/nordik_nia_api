@@ -64,6 +64,7 @@ class DateParts:
     precision: str = ""          # "day" | "month" | "year" | ""
     extra: tuple[str, ...] = ()  # further dates in the same cell, ISO-formatted
     flags: tuple[str, ...] = ()
+    range_end: str = ""
 
     @property
     def iso(self) -> str:
@@ -296,6 +297,40 @@ def parse_date(text: str) -> DateParts:
     raw = (text or "").strip()
     if not raw:
         return DateParts()
+    if re.fullmatch(r"0+(?:[-/.]0+)*", raw):
+        return DateParts()
+    short = re.fullmatch(r"(\d{4}-\d{2}-)(\d{2})-(\d{2})", raw)
+    if short:
+        return parse_date(f"{short[1]}{short[2]} | {short[1]}{short[3]}")
+    if ":" in raw:
+        ends = raw.split(":")
+        if len(ends) != 2:
+            return DateParts(flags=("unparsed",))
+        start, end = (parse_date(value) for value in ends)
+        return DateParts(start.year, start.month, start.day, start.precision,
+                         (end.iso,), tuple(dict.fromkeys((*start.flags, *end.flags, "range"))), end.iso)
+
+    # Standardized expressions retain source order and their logical meaning.
+    if "|" in raw or "&" in raw:
+        values = [parse_date(part) for part in re.split(r"[|&]", raw)]
+        first = values[0]
+        flags = [flag for part in values for flag in part.flags]
+        if "|" in raw:
+            flags.append("alternative")
+        if "&" in raw:
+            flags.append("conjunctive")
+        flags.append("multiple")
+        return DateParts(first.year, first.month, first.day, first.precision,
+                         tuple(part.iso for part in values[1:]), tuple(dict.fromkeys(flags)))
+
+    standard = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", raw)
+    if standard and int(standard[1]) == 0:
+        month, day = int(standard[2]) or None, int(standard[3]) or None
+        if month is not None and not 1 <= month <= 12:
+            return DateParts(flags=("invalid_month",))
+        if day is not None and (month is None or not 1 <= day <= calendar.monthrange(2000, month)[1]):
+            return DateParts(month=month, precision="month" if month else "", flags=("impossible_day",))
+        return DateParts(month=month, day=day, precision=_precision_of(month, day) if month else "")
 
     flags: list[str] = []
     extras: list[str] = []

@@ -9,6 +9,8 @@ from app.execution.turn import AssistantTurnService
 from app.llm.fake import FakeReasoningProvider
 from app.memory.store import InMemoryMemoryStore
 from app.planning.catalog import static_catalog
+from app.planning.plan_schema import PlanOp
+from app.planning.plan_validator import PlanValidationError
 from app.planning.query_plan_builder import build_query_plan
 from app.planning.turn_schema import (
     AggregateSpec,
@@ -19,8 +21,6 @@ from app.planning.turn_schema import (
     TurnPlan,
 )
 from app.planning.turn_validator import MIN_TURN_CONFIDENCE, validate_turn_plan
-from app.planning.plan_schema import PlanOp
-from app.planning.plan_validator import PlanValidationError
 from app.security.access_scope import AccessScope
 
 
@@ -466,10 +466,10 @@ def test_spoken_multi_action_does_not_and_filters():
 
 
 def test_multi_action_memory_keeps_separate_frames():
-    from app.memory.store import InMemoryMemoryStore
-    from app.llm.fake import FakeReasoningProvider
     from app.data_gateway.memory import MemoryDataGateway
     from app.execution.turn import AssistantTurnService
+    from app.llm.fake import FakeReasoningProvider
+    from app.memory.store import InMemoryMemoryStore
 
     store = InMemoryMemoryStore()
     service = AssistantTurnService(MemoryDataGateway(), store=store, reasoner=FakeReasoningProvider())
@@ -493,9 +493,9 @@ def test_multi_action_memory_keeps_separate_frames():
 
 
 def test_synthesis_packet_keeps_action_branches():
+    from app.data_gateway.memory import MemoryDataGateway
     from app.execution.executor import QueryExecutor
     from app.execution.turn import _packet_for_synthesis
-    from app.data_gateway.memory import MemoryDataGateway
 
     turn = TurnPlan(
         normalized_request="count Garden River and list S names",
@@ -594,8 +594,8 @@ def test_repeat_provenance_for_first_request():
 
 
 def test_stored_source_action_round_trips_compare():
-    from app.planning.query_plan_builder import query_action_from_state
     from app.memory.types import QueryState
+    from app.planning.query_plan_builder import query_action_from_state
     from app.planning.turn_schema import CompareBranch
 
     source = QueryAction(

@@ -20,9 +20,9 @@ from app.planning.ai_planner import (
 )
 from app.planning.ai_turn_schema import (
     GoalRequirement,
-    PlanReviewResponse,
     PlannedQueryAction,
     PlannedTurn,
+    PlanReviewResponse,
 )
 from app.planning.catalog import static_catalog
 from app.planning.conversation_resolver import ConversationContext

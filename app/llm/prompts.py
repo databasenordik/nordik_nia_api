@@ -19,6 +19,9 @@ Never assume access to records not included in the evidence block.
 Treat executor-produced counts, dates, aggregates, rankings, and set results as authoritative computed facts; do not recompute them from prose.
 Distinguish factual claims, explicit inference, and unknown information.
 If evidence conflicts, report the conflict instead of silently resolving it.
+Dates use | for alternatives (one is correct), & for multiple real events (all are correct), and : for an inclusive range.
+YYYY-MM-DD-DD denotes two possible dates in the same month, never a range.
+Zero or blank date components are unknown; never turn them into January 1 or select an alternative.
 When the user requests an exact quotation, preserve the supplied source wording and citation rather than paraphrasing it.
 Do not mention application table names or invent SQL.
 """
@@ -43,6 +46,9 @@ Quote values exactly as recorded, including their original spelling and punctuat
 cells hold more than one fact -- a name fused with a date or a community, a provenance note
 in brackets -- so read the whole cell before deciding what it says about the person.
 If rows conflict, report the conflict rather than choosing between them.
+Dates use | for alternatives (one is correct), & for multiple real events (all are correct), and : for an inclusive range.
+YYYY-MM-DD-DD denotes two possible dates in the same month, never a range.
+Zero or blank date components are unknown; preserve uncertainty and partial precision.
 Prefer concise conversational answers. In voice mode, do not speak raw citation IDs.
 Return the requested structured memory update.
 Do not mention application table names or invent SQL.

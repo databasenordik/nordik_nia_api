@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from app.planning.catalog import FieldCatalog
-from app.planning.plan_validator import PlanValidationError
+from app.planning.plan_validator import PlanValidationError, validate_filter_value
 from app.planning.turn_schema import (
     ALLOWED_OPERATORS,
     CONVERSATIONAL_INTENTS,
@@ -323,6 +323,7 @@ def _validate_query_action(
 def _validate_filter(spec: FilterSpec, datasets: list[int], catalog: FieldCatalog) -> None:
     if spec.operator not in ALLOWED_OPERATORS:
         raise PlanValidationError(f"unsupported operator {spec.operator}", code="operator")
+    validate_filter_value(spec.operator, spec.value)
     for file_id in datasets:
         field = catalog.resolve_field(file_id, spec.field)
         if field is None:

@@ -186,5 +186,5 @@ def test_backfill_writes_only_recorded_components():
     row = {"row_data_normalized": {"fields": {"Admitted": {"raw": "June 1882"}}}}
     block = date_block(row, ["admitted_date"], {"admitted_date": ["fields.Admitted"]})
     entry = block["admitted_date"]
-    assert entry == {"year": 1882, "month": 6, "iso": "1882-06", "precision": "month"}
+    assert entry == {"year": 1882, "month": 6, "iso": "1882-06", "precision": "month", "event_count": 1}
     assert "day" not in entry
