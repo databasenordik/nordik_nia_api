@@ -99,6 +99,35 @@ def test_nested_boolean_group_is_evaluated(gateway):
     assert both > sarnia
 
 
+def test_candidate_search_applies_community_filter_in_postgres(gateway):
+    """Candidate retrieval must use the filter-aware overload before its LIMIT.
+
+    The gRPC community gateway forwards this predicate to the repository.  Calling
+    the real PostgreSQL gateway here catches a missing seven-argument SQL function
+    as well as a function that limits candidates before applying the community.
+    """
+    api, loop = gateway
+    rows = loop.run_until_complete(
+        api.retrieve_candidates(
+            SCOPE,
+            (49,),
+            "Shingwauk",
+            "exact",
+            limit=1,
+            predicates=[
+                Predicate(
+                    field="community",
+                    operator=FilterOperator.IN,
+                    value=["Garden River"],
+                )
+            ],
+        )
+    )
+
+    assert rows
+    assert {row["canonical_community"] for row in rows} == {"Garden River"}
+
+
 def test_statistics_match_the_recorded_ages(gateway):
     api, loop = gateway
     stats = loop.run_until_complete(api.field_stats(SCOPE, (91,), [], "age_at_death"))
