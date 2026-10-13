@@ -81,6 +81,10 @@ class AssistantDataGateway:
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
 
+    async def potential_access_revision(self) -> str:
+        async with self._pool.acquire() as conn:
+            return str(await conn.fetchval("SELECT assistant_api.potential_access_revision()"))
+
     async def list_datasets(self, scope: AccessScope) -> list[dict[str, Any]]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(

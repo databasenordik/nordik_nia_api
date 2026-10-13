@@ -7,22 +7,22 @@ like two who overlapped.
 
 The question is about periods, so this compares them. Records are grouped by the shared value;
 each record's period runs from its start date to its end date; a sweep over those periods finds
-the times when enough members of a group were present together. A date written as a year alone
-covers that whole year, and a cell that holds two admissions or cannot be read is not placed at
+the times when enough members of a group were present together. Partial dates establish only
+the period from the latest possible admission to the earliest possible discharge. Multiple
+admissions whose departures cannot be paired, or dates that cannot be read, are not placed at
 all -- such records are counted, so the answer says how much of a group could be checked rather
 than quietly judging a family by the children whose dates happen to parse.
 """
 
 from __future__ import annotations
 
-import calendar
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
-from app.execution.derivations import date_precision, parse_date
 from app.execution.derivations import value_part as derive_part
 from app.execution.row_projection import semantic_value
+from app.normalization.date_expression import bounds, date_groups
 from app.planning.catalog import FieldCatalog
 from app.value_normalization import json_object
 
@@ -140,26 +140,19 @@ def _stored(row: dict[str, Any], field_name: str, catalog: FieldCatalog) -> Any:
 
 
 def _bound(node: Any, *, end: bool) -> date | None:
-    """Where a period starts or ends. A year alone covers the whole year; two dates, none."""
+    """Boundary of guaranteed presence, preserving uncertainty in partial dates."""
     if isinstance(node, dict):
         kind = str(node.get("kind") or "")
         if kind in {"range", "unparsed"}:
             return None
-        if kind == "year" and str(node.get("year") or "").isdigit():
-            year = int(node["year"])
-            return date(year, 12, 31) if end else date(year, 1, 1)
-        text = node.get("iso") or node.get("raw")
+        text = node.get("iso") or node.get("raw") or node.get("year")
     else:
         text = node
-    parsed = parse_date(text)
-    if parsed is None or not end:
-        return parsed
-    precision = date_precision(text)
-    if precision == "year":
-        return date(parsed.year, 12, 31)
-    if precision == "month":
-        return date(parsed.year, parsed.month, calendar.monthrange(parsed.year, parsed.month)[1])
-    return parsed
+    groups = date_groups(text)
+    if len(groups) != 1 or len(groups[0]) != 1:
+        return None
+    interval = bounds(groups[0][0])
+    return interval[0 if end else 1] if interval else None
 
 
 def _together(stays: list[Stay], need: int) -> tuple[list[Stay], list[tuple[date, date]]]:

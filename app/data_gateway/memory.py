@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import random
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -20,6 +22,7 @@ from app.execution.filters import apply_predicates, extract_field_value
 from app.planning.catalog import FieldCatalog, static_catalog
 from app.planning.plan_schema import Predicate, QueryPlan
 from app.security.access_scope import AccessScope
+from app.security.row_access import released_validation_rules, row_is_released
 from app.value_normalization import semantic_scalar
 
 if TYPE_CHECKING:
@@ -138,7 +141,9 @@ def seed_records() -> list[dict[str, Any]]:
             "canonical_school": "Shingwauk",
             "search_text": "Sarah B tuberculosis confirmed",
             "raw": {"Name": "Sarah B", "Cause of Death": "tuberculosis"},
-            "row_data_normalized": {"canonical": {"name": "Sarah B", "cause_of_death": "tuberculosis"}},
+            "row_data_normalized": {
+                "canonical": {"name": "Sarah B", "cause_of_death": "tuberculosis"}
+            },
         },
         {
             "id": 7,
@@ -163,10 +168,37 @@ class MemoryDataGateway:
         records: list[dict[str, Any]] | None = None,
         catalog: FieldCatalog | None = None,
     ) -> None:
-        self._records = records if records is not None else seed_records()
-        self._catalog = catalog or static_catalog()
+        self._released_records = [
+            row
+            for row in (records if records is not None else seed_records())
+            if row_is_released(row)
+        ]
+        source_catalog = catalog or static_catalog()
+        self._catalog = source_catalog.model_copy(
+            update={
+                "fields": tuple(
+                    field.model_copy(
+                        update={
+                            "validation_rules": released_validation_rules(
+                                field.file_id, field.validation_rules
+                            )
+                        }
+                    )
+                    for field in source_catalog.fields
+                )
+            }
+        )
         self.calls: list[str] = []
         self.method_delays: dict[str, float] = {}
+
+    @property
+    def _records(self) -> list[dict[str, Any]]:
+        self._released_records = [row for row in self._released_records if row_is_released(row)]
+        return self._released_records
+
+    async def potential_access_revision(self) -> str:
+        rows = [row for row in self._records if int(row["file_id"]) == 94]
+        return hashlib.sha256(json.dumps(rows, sort_keys=True, default=str).encode()).hexdigest()
 
     async def list_datasets(self, scope: AccessScope) -> list[dict[str, Any]]:
         rows = []
@@ -350,9 +382,7 @@ class MemoryDataGateway:
         ordered = sorted(values)
         middle = len(ordered) // 2
         median = (
-            ordered[middle]
-            if len(ordered) % 2
-            else (ordered[middle - 1] + ordered[middle]) / 2
+            ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
         )
         counts: dict[float, int] = {}
         for value in values:
@@ -458,6 +488,8 @@ class MemoryDataGateway:
         for row in rows:
             start_text = self._display(row, start_field)
             end_text = self._display(row, end_field)
+            if date_precision(start_text) != "day" or date_precision(end_text) != "day":
+                continue
             start = parse_date(start_text)
             end = parse_date(end_text)
             if start is None or end is None:
@@ -515,9 +547,7 @@ class MemoryDataGateway:
         ordered = sorted(item.days for item in bounded)
         middle = len(ordered) // 2
         median = (
-            ordered[middle]
-            if len(ordered) % 2
-            else (ordered[middle - 1] + ordered[middle]) / 2
+            ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
         )
         return IntervalStats(
             record_count=len(bounded),
@@ -543,7 +573,12 @@ class MemoryDataGateway:
         allowed = tuple(
             file_id
             for file_id in file_ids
-            if scope.allows_file(file_id, private=bool(self._catalog.dataset(file_id) and self._catalog.dataset(file_id).private))
+            if scope.allows_file(
+                file_id,
+                private=bool(
+                    self._catalog.dataset(file_id) and self._catalog.dataset(file_id).private
+                ),
+            )
         )
         matched = apply_predicates(self._records, predicates, self._catalog, allowed)
         if sort_field:
@@ -561,7 +596,7 @@ class MemoryDataGateway:
                 reverse=sort_direction == "DESC",
             )
         start = max(int(offset), 0)
-        return matched[start:start + max(int(limit), 0)]
+        return matched[start : start + max(int(limit), 0)]
 
     async def list_records_window(
         self,
@@ -582,15 +617,19 @@ class MemoryDataGateway:
         base = total - selected if anchor == "end" else 0
         offset = base + safe_cursor
         effective = min(max(int(page_size), 0), selected - safe_cursor)
-        rows = await self.list_records(
-            scope,
-            file_ids,
-            predicates,
-            limit=effective,
-            offset=offset,
-            sort_field=sort_field,
-            sort_direction=sort_direction,
-        ) if effective else []
+        rows = (
+            await self.list_records(
+                scope,
+                file_ids,
+                predicates,
+                limit=effective,
+                offset=offset,
+                sort_field=sort_field,
+                sort_direction=sort_direction,
+            )
+            if effective
+            else []
+        )
         return RecordPage(
             rows=rows,
             total_count=total,
@@ -617,8 +656,7 @@ class MemoryDataGateway:
             if scope.allows_file(
                 file_id,
                 private=bool(
-                    self._catalog.dataset(file_id)
-                    and self._catalog.dataset(file_id).private
+                    self._catalog.dataset(file_id) and self._catalog.dataset(file_id).private
                 ),
             )
         )
@@ -640,8 +678,7 @@ class MemoryDataGateway:
             if scope.allows_file(
                 file_id,
                 private=bool(
-                    self._catalog.dataset(file_id)
-                    and self._catalog.dataset(file_id).private
+                    self._catalog.dataset(file_id) and self._catalog.dataset(file_id).private
                 ),
             )
         )
@@ -741,8 +778,6 @@ def _edit_distance(left: str, right: str) -> int:
     for i, a in enumerate(left, start=1):
         current = [i]
         for j, b in enumerate(right, start=1):
-            current.append(
-                min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a != b))
-            )
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a != b)))
         previous = current
     return previous[-1]

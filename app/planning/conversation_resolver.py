@@ -32,6 +32,7 @@ class ConversationContext:
 
     active_plan: QueryPlan | None = None
     active_query_text: str = ""
+    active_question: str = ""
     memory_text: str = ""
     active_query: ActiveQuery | None = None
     topic_frames: tuple[dict, ...] = ()

@@ -1103,6 +1103,17 @@ def _compile_branch(
         current = limited_id
 
     projection = _requested_projection(query.requested_fields, file_ids, catalog)
+    if goal == "list":
+        # Show which attribute is unrecorded alongside the matching person's name.
+        # This supplies evidence for the missing-value condition without changing rows.
+        conditions = list(query.filters)
+        for group in query.filter_groups:
+            conditions.extend(group.filters)
+        for condition in conditions:
+            if condition.operator == "IS_UNKNOWN":
+                field = _canonical_field(condition.field, file_ids, catalog)
+                if field not in projection:
+                    projection.append(field)
     if query.group_by:
         for name in query.group_by:
             field = _canonical_field(name, file_ids, catalog)
