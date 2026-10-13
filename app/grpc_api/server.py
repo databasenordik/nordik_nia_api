@@ -26,10 +26,10 @@ def initial_scope(settings: Settings) -> AccessScope:
     principal_id = settings.nia_grpc_principal_id or settings.standalone_demo_principal_id
     if not principal_id:
         raise ValueError("NIA_GRPC_PRINCIPAL_ID is required for the initial gRPC data scope")
-    ids = tuple(int(v.strip()) for v in settings.nia_grpc_allowed_file_ids.split(",") if v.strip())
-    if not ids or any(v <= 0 for v in ids):
-        raise ValueError("NIA_GRPC_ALLOWED_FILE_IDS must contain positive file IDs")
-    return AccessScope(principal_id=principal_id, allowed_file_ids=ids,
+    # The Go adapter supplies one selected file ID for every request.  The request
+    # scope is created in Query so this service is not constrained by a stale,
+    # manually maintained environment-variable allow-list.
+    return AccessScope(principal_id=principal_id, allowed_file_ids=(),
                        can_use_private_files=settings.nia_grpc_can_use_private_files)
 
 
@@ -63,9 +63,12 @@ class AssistantServicer(nia_pb2_grpc.AssistantServicer):
             communities = tuple(sorted({c.strip() for c in request.communities if c.strip()}))
             if len(communities) > 100 or any(len(c) > 200 for c in communities):
                 raise ValueError("too many communities or an overlong community name")
-            if not self.scope.allows_file(request.selected_file_id):
-                await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "dataset is not enabled for gRPC")
-            scope = self.scope.narrow((request.selected_file_id,))
+            # Restrict this turn to Go's selected dataset.  The database functions
+            # enforce whether that dataset is enabled and whether this principal may
+            # use it; no fixed NIA_GRPC_ALLOWED_FILE_IDS deployment setting is used.
+            scope = self.scope.model_copy(
+                update={"allowed_file_ids": (request.selected_file_id,)}
+            )
             gateway, store, reasoner = self.service_factory(scope, communities)
             if communities:
                 catalog = await gateway.load_catalog(scope)

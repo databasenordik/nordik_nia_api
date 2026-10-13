@@ -59,8 +59,8 @@ async def test_health_over_grpc(grpc_client):
     assert reply.status == "ok"
 
 
-@pytest.mark.parametrize("question,file_id", [("", 49), ("x" * 4001, 49), ("count", 0), ("count", 999)],
-                         ids=["empty-question", "long-question", "zero-file", "disabled-file"])
+@pytest.mark.parametrize("question,file_id", [("", 49), ("x" * 4001, 49), ("count", 0)],
+                         ids=["empty-question", "long-question", "zero-file"])
 async def test_invalid_requests_return_invalid_argument(grpc_client, question, file_id):
     with pytest.raises(grpc.aio.AioRpcError) as exc:
         await grpc_client.Query(nia_pb2.QueryRequest(question=question, selected_file_id=file_id), timeout=5)
@@ -123,10 +123,31 @@ async def test_deadline_cancels_server_work(grpc_client, monkeypatch):
     await asyncio.wait_for(canceled.wait(), 1)
 
 
-def test_scope_configuration_needs_no_jwt():
+async def test_query_scopes_to_the_selected_file_without_a_startup_allow_list():
+    captured_scope = None
+
+    def factory(scope, _communities):
+        nonlocal captured_scope
+        captured_scope = scope
+        return MemoryDataGateway(), InMemoryMemoryStore(), FakeReasoningProvider()
+
+    service = AssistantServicer(
+        AccessScope(principal_id="grpc-test", allowed_file_ids=()), factory
+    )
+    reply = await service.Query(
+        nia_pb2.QueryRequest(question="How many records are in this list?", selected_file_id=49),
+        None,
+    )
+
+    assert reply.status == "answered"
+    assert captured_scope is not None
+    assert captured_scope.allowed_file_ids == (49,)
+
+
+def test_scope_configuration_needs_no_jwt_or_fixed_file_list():
     settings = Settings(_env_file=None, nia_grpc_principal_id="configured-data-principal",
-                        nia_grpc_allowed_file_ids="49,91", jwt_secret="")
-    assert initial_scope(settings).allowed_file_ids == (49, 91)
+                        jwt_secret="")
+    assert initial_scope(settings).allowed_file_ids == ()
     with pytest.raises(ValueError, match="NIA_GRPC_PRINCIPAL_ID"):
         initial_scope(Settings(_env_file=None, nia_grpc_principal_id="",
                                standalone_demo_principal_id=""))
