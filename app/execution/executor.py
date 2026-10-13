@@ -832,8 +832,8 @@ def _typed_aggregate_value(value: Any, semantic_type: str) -> int | float | str 
         return None
     text = str(value).strip()
     if semantic_type == "date":
-        match = re.search(r"(1[6-9]\d{2}|20\d{2})", text)
-        return int(match.group(1)) if match else None
+        from app.normalization.date_expression import shared_component
+        return shared_component(text, "year")
     if semantic_type == "number":
         match = re.search(r"-?\d+(?:\.\d+)?", text)
         if match is None:

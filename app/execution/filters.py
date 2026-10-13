@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.normalization.date_expression import DATE_OPERATORS, date_matches
 from app.planning.catalog import FieldCatalog, FieldSpec
 from app.planning.plan_schema import FilterOperator, Predicate
-from app.value_normalization import json_object
+from app.value_normalization import json_object, semantic_scalar
 
 
 def extract_field_value(record: dict[str, Any], spec: FieldSpec) -> Any:
@@ -54,8 +55,10 @@ def _walk(row: Any, path: str) -> Any:
 
 
 def predicate_matches(record: dict[str, Any], predicate: Predicate, spec: FieldSpec) -> bool:
-    value = extract_field_value(record, spec)
+    value = semantic_scalar(extract_field_value(record, spec))
     operator = predicate.operator
+    if spec.semantic_type == "date" and operator.value in DATE_OPERATORS:
+        return date_matches(value, operator.value, predicate.value)
     if operator in _NEGATIVE_OPERATORS:
         return _negative_match(value, predicate)
     if operator is FilterOperator.IS_UNKNOWN:

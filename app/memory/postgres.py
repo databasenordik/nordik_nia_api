@@ -32,8 +32,10 @@ class PostgresMemoryStore:
 
     async def save(self, record: ConversationRecord) -> None:
         _prepare_turns(record)
-        snapshot = _snapshot(record)
         async with self._pool.acquire() as conn:
+            if record.selected_file_id == 94 and record.row_access_revision is None:
+                record.row_access_revision = await conn.fetchval("SELECT assistant_api.potential_access_revision()")
+            snapshot = _snapshot(record)
             async with conn.transaction():
                 owner = await conn.fetchrow(
                     """
@@ -110,9 +112,17 @@ class PostgresMemoryStore:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
+                WITH release AS MATERIALIZED (SELECT assistant_api.potential_access_revision() AS revision)
                 SELECT c.id::text AS id, c.principal_id, c.selected_file_id,
-                       c.title, s.rolling_summary, s.active_query_state
+                       c.title,
+                       CASE WHEN c.selected_file_id = 94 AND s.active_query_state->>'row_access_revision' IS DISTINCT FROM release.revision
+                            THEN '' ELSE s.rolling_summary END AS rolling_summary,
+                       CASE WHEN c.selected_file_id = 94 AND s.active_query_state->>'row_access_revision' IS DISTINCT FROM release.revision
+                            THEN s.active_query_state - ARRAY['rolling_summary','recent_turns','frames','result_sets','last_action_keys','active_frame_key']
+                            ELSE s.active_query_state END AS active_query_state,
+                       release.revision AS current_access_revision
                 FROM assistant.conversations c
+                CROSS JOIN release
                 LEFT JOIN assistant.conversation_state s ON s.conversation_id = c.id
                 WHERE c.principal_id = $1
                 ORDER BY c.updated_at DESC
@@ -125,10 +135,17 @@ class PostgresMemoryStore:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
+                WITH release AS MATERIALIZED (SELECT assistant_api.potential_access_revision() AS revision)
                 SELECT c.id::text AS id, c.principal_id, c.selected_file_id,
-                       c.title, s.rolling_summary,
-                       s.active_query_state, messages.stored_messages
+                       c.title,
+                       CASE WHEN c.selected_file_id = 94 AND s.active_query_state->>'row_access_revision' IS DISTINCT FROM release.revision
+                            THEN '' ELSE s.rolling_summary END AS rolling_summary,
+                       CASE WHEN c.selected_file_id = 94 AND s.active_query_state->>'row_access_revision' IS DISTINCT FROM release.revision
+                            THEN s.active_query_state - ARRAY['rolling_summary','recent_turns','frames','result_sets','last_action_keys','active_frame_key']
+                            ELSE s.active_query_state END AS active_query_state,
+                       messages.stored_messages, release.revision AS current_access_revision
                 FROM assistant.conversations c
+                CROSS JOIN release
                 LEFT JOIN assistant.conversation_state s ON s.conversation_id = c.id
                 LEFT JOIN LATERAL (
                     SELECT jsonb_agg(to_jsonb(recent) ORDER BY recent.sequence) AS stored_messages
@@ -140,6 +157,8 @@ class PostgresMemoryStore:
                                     ELSE 0 END AS sequence
                         FROM assistant.messages m
                         WHERE m.conversation_id = c.id
+                          AND (c.selected_file_id IS DISTINCT FROM 94 OR m.role = 'user'
+                               OR s.active_query_state->>'row_access_revision' = release.revision)
                         ORDER BY sequence DESC, m.created_at DESC, m.id DESC
                         LIMIT 12
                     ) recent
@@ -241,6 +260,7 @@ def _snapshot(record: ConversationRecord) -> dict[str, Any]:
         "result_sets": {key: value.model_dump(mode="json") for key, value in record.result_sets.items()},
         "recent_turns": record.recent_turns,
         "rolling_summary": record.rolling_summary,
+        "row_access_revision": record.row_access_revision,
         "last_action_keys": list(record.last_action_keys),
         "user_display_name": record.user_display_name,
         "message_sequence": record.message_sequence,
@@ -259,6 +279,8 @@ def _from_row(row: dict[str, Any], principal_id: str) -> ConversationRecord:
         # then never shown -- the row said one thing and every endpoint said another.
         record.selected_file_id = row.get("selected_file_id") or record.selected_file_id
         record.title = row.get("title") or record.title
+        if record.selected_file_id == 94:
+            record.row_access_revision = row.get("current_access_revision")
         _enrich_turns(record, row.get("stored_messages"))
         return record
     return ConversationRecord(
@@ -267,6 +289,7 @@ def _from_row(row: dict[str, Any], principal_id: str) -> ConversationRecord:
         selected_file_id=row.get("selected_file_id"),
         title=row.get("title"),
         rolling_summary=row.get("rolling_summary") or "",
+        row_access_revision=row.get("current_access_revision") if row.get("selected_file_id") == 94 else None,
     )
 
 
@@ -289,6 +312,7 @@ def _from_snapshot(payload: dict[str, Any], principal_id: str) -> ConversationRe
         result_sets=result_sets,
         recent_turns=list(payload.get("recent_turns") or []),
         rolling_summary=payload.get("rolling_summary") or "",
+        row_access_revision=payload.get("row_access_revision"),
         last_action_keys=list(payload.get("last_action_keys") or []),
         user_display_name=payload.get("user_display_name"),
         message_sequence=int(payload.get("message_sequence") or 0),

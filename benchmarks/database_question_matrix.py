@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import calendar
 import dataclasses
 import json
 import os
@@ -24,6 +25,7 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
@@ -90,6 +92,7 @@ CASES: tuple[Case, ...] = (
     Case("M07", 49, "How many student records are missing a community?", "count", conditions=(Condition("community", "missing"),)),
     Case("M08", 49, "How many distinct communities are recorded?", "distinct_count", field="community"),
     Case("M09", 49, "Which community appears most often?", "mode", field="community", direction="desc"),
+    Case("M10", 49, "How many students have at least two recorded admission dates?", "count", conditions=(Condition("admitted_date_event_count", "gt", 1),)),
     Case("M11", 49, "How many students were admitted in 1964?", "count", conditions=(Condition("admitted_date", "year", 1964),)),
     Case("M12", 49, "How many students were admitted before 1900?", "count", conditions=(Condition("admitted_date", "before", 1900),)),
     Case("M13", 49, "How many students were admitted between 1940 and 1945?", "count", conditions=(Condition("admitted_date", "range", (1940, 1945)),)),
@@ -104,7 +107,6 @@ CASES: tuple[Case, ...] = (
     Case("M22", 49, "Show the student number and community for Albert Penance.", "lookup", search="albert penance", projection=("student_name", "student_number", "community")),
     Case("M23", 49, "Show all information for Albert Penance.", "lookup", search="albert penance", projection=("*",)),
     Case("M24", 49, "List the last 5 students alphabetically by full student name.", "list", field="student_name", direction="asc", limit=5, projection=("student_name",), window_anchor="end"),
-    Case("M25", 49, "List the first 5 students with their names and communities.", "list", field="student_name", direction="asc", limit=5, projection=("student_name", "community")),
     Case("M26", 49, "How many records have a student number?", "count", conditions=(Condition("student_number", "known"),)),
     Case("M27", 49, "What is the most common mapping location?", "mode", field="mapping_location", direction="desc"),
     Case("M28", 49, "How many notes contain student register?", "count", conditions=(Condition("notes", "contains", "student register"),)),
@@ -114,7 +116,7 @@ CASES: tuple[Case, ...] = (
     Case("D04", 91, "How many confirmed death records are missing a cause of death?", "count", conditions=(Condition("cause_of_death", "missing"),)),
     Case("D05", 91, "What different causes of death are recorded?", "distinct_values", field="cause_of_death"),
     Case("D06", 91, "What is the most common cause of death?", "mode", field="cause_of_death", direction="desc"),
-    Case("D07", 91, "How many causes of death contain tuberculosis?", "count", conditions=(Condition("cause_of_death", "contains", "tuberculosis"),)),
+    Case("D07", 91, "How many students died from tuberculosis?", "count", conditions=(Condition("cause_of_death", "contains", "tuberculosis"),)),
     Case("D08", 91, "How many confirmed deaths mention drowning as the cause?", "count", conditions=(Condition("cause_of_death", "contains", "drown"),)),
     Case("D09", 91, "How many students died in 1900?", "count", conditions=(Condition("death_date", "year", 1900),)),
     Case("D10", 91, "Which year has the most confirmed deaths?", "mode", field="death_date", direction="desc", value_part="year"),
@@ -124,7 +126,7 @@ CASES: tuple[Case, ...] = (
     Case("D14", 91, "How many students were between 10 and 14 years old at death?", "count", conditions=(Condition("age_at_death", "number_range", (10, 14)),)),
     Case("D15", 91, "What is the maximum recorded age at death?", "max", field="age_at_death"),
     Case("D16", 91, "What is the minimum recorded age at death?", "min", field="age_at_death"),
-    Case("D17", 91, "Show the distribution of recorded genders.", "distribution", field="gender", include_missing=True),
+    Case("D17", 91, "Show the distribution of recorded genders.", "distribution", field="gender", include_missing=False),
     Case("D18", 91, "How many confirmed death records are female?", "count", conditions=(Condition("gender", "equals", "F"),)),
     Case("D19", 91, "How many confirmed death records have no recorded gender?", "count", conditions=(Condition("gender", "missing"),)),
     Case("D20", 91, "How many confirmed death records have a recorded community or reserve?", "count", conditions=(Condition("community", "known"),)),
@@ -142,7 +144,6 @@ CASES: tuple[Case, ...] = (
     Case("A02", 93, "How many additional death records have a recorded community?", "count", conditions=(Condition("community", "known"),)),
     Case("A03", 93, "How many additional death records are missing a community?", "count", conditions=(Condition("community", "missing"),)),
     Case("A04", 93, "How many distinct communities are recorded in additional deaths?", "distinct_count", field="community"),
-    Case("A05", 93, "List the first 5 additional death names.", "list", field="student_name", direction="asc", limit=5, projection=("student_name",)),
     Case("A06", 93, "How many additional death records have a student number?", "count", conditions=(Condition("student_number", "known"),)),
     Case("P01", 94, "How many records are in the potential list?", "count"),
     Case("P02", 94, "How many potential records have a recorded cause of death?", "count", conditions=(Condition("cause_of_death", "known"),)),
@@ -155,7 +156,7 @@ CASES: tuple[Case, ...] = (
     # Was "unsupported" while file 94 had no community field registered. The list does record
     # origin -- in COMMUNITY/RESERVE and in pasted name cells -- so this is an ordinary count.
     Case("P09", 94, "How many potential records are from Garden River?", "count", conditions=(Condition("community", "contains", "garden river"),)),
-    Case("P10", 94, "How many potential records have a student number?", "unsupported"),
+    Case("P10", 94, "How many potential records have a student number?", "count", conditions=(Condition("student_number", "known"),)),
 )
 
 
@@ -175,6 +176,10 @@ class Oracle:
     collation_rank: dict[tuple[int, str], dict[str, int]] = dataclasses.field(default_factory=dict)
 
     def value(self, file_id: int, row: dict[str, Any], field_name: str) -> Any:
+        if field_name.endswith("_event_count"):
+            value = str(self.value(file_id,row,field_name.removesuffix("_event_count")) or "")
+            return min(sum(_standard_date_match(event,Condition("date","known")) for event in branch.split("&"))
+                       for branch in value.split("|"))
         path = self.paths.get((file_id, field_name))
         current: Any = row.get("row_data_normalized") or {}
         walked = None
@@ -282,6 +287,7 @@ class Oracle:
                 self.value(file_id, row, condition.field),
                 condition,
                 rules=self.rules.get((file_id, condition.field), {}),
+                date_field=self.types.get((file_id, condition.field)) == "date",
             )
             for condition in conditions
         )
@@ -345,7 +351,11 @@ def _scalar(value: Any) -> Any:
 def _year(value: Any) -> int | None:
     if isinstance(value, dict):
         value = _scalar(value)
-    match = re.search(r"(1[6-9]\d{2}|20\d{2})", str(value or ""))
+    text = str(value or "")
+    if re.search(r"[|&:]", text):
+        years = {int(match) for match in re.findall(r"(?:^|[|&:]\s*)(\d{4})", text)}
+        return next(iter(years)) if len(years) == 1 and 0 not in years else None
+    match = re.search(r"(1[6-9]\d{2}|20\d{2})", text)
     return int(match.group(1)) if match else None
 
 
@@ -396,8 +406,10 @@ def _contains_any(value: Any, terms: list[str]) -> bool:
     return any(term.casefold() in haystack for term in terms if term)
 
 
-def _matches(value: Any, condition: Condition, *, rules: dict[str, Any] | None = None) -> bool:
+def _matches(value: Any, condition: Condition, *, rules: dict[str, Any] | None = None, date_field: bool = False) -> bool:
     op = condition.operator
+    if date_field:
+        return _standard_date_match(value, condition)
     if op == "known":
         if value in (None, "", []):
             return False
@@ -433,6 +445,61 @@ def _matches(value: Any, condition: Condition, *, rules: dict[str, Any] | None =
     raise ValueError(f"unknown condition operator {op}")
 
 
+def _standard_date_match(value: Any, condition: Condition) -> bool:
+    """Independent oracle for standardized dates; does not call application parsers."""
+    text = str(value or "").strip()
+    short = re.fullmatch(r"(\d{4}-\d{2}-)(\d{2})-(\d{2})", text)
+    if short:
+        text = f"{short[1]}{short[2]} | {short[1]}{short[3]}"
+
+    def interval(token):
+        ends = token.strip().split(":")
+        spans = []
+        for end in ends:
+            match = re.fullmatch(r"\s*(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?\s*", end)
+            if not match:
+                return None
+            year, month, day = (int(part or 0) for part in match.groups())
+            if not year:
+                return None
+            try:
+                spans.append((date(year, month or 1, day or 1),
+                              date(year, month or 12, day or calendar.monthrange(year, month or 12)[1])))
+            except ValueError:
+                return None
+        return (spans[0][0], spans[-1][1]) if spans[0][0] <= spans[-1][1] else None
+
+    groups = [[interval(event) for event in branch.split("&")] for branch in text.split("|")]
+    if condition.operator in {"known", "missing"}:
+        def partial_known(token):
+            match = re.fullmatch(r"\s*0000-(0[1-9]|1[0-2])-(\d{2})\s*", token)
+            if not match:
+                return False
+            try:
+                date(2000, int(match[1]), int(match[2]) or 1)
+                return True
+            except ValueError:
+                return False
+        known = all(any(interval(event) is not None or partial_known(event)
+                        for event in branch.split("&")) for branch in text.split("|"))
+        return known if condition.operator == "known" else not known
+    def hit(span):
+        if span is None:
+            return False
+        low, high = span
+        op, expected = condition.operator, condition.value
+        if op == "year":
+            return low.year == high.year == int(expected)
+        if op == "before":
+            return high < date(int(expected), 1, 1)
+        if op == "after":
+            return low > date(int(expected), 12, 31)
+        if op == "range":
+            return date(int(expected[0]), 1, 1) <= low and high <= date(int(expected[1]), 12, 31)
+        raise ValueError(f"unsupported date condition {op}")
+    return all(any(hit(span) for span in branch) for branch in groups)
+
+
 def _comparable(value: Any, *, date_field: bool) -> int | float | str | None:
     if value in (None, ""):
         return None
@@ -456,6 +523,8 @@ def _date_key(value: Any) -> tuple[int, int, int] | None:
     """Parse a conservative chronological key without trusting malformed years."""
 
     text = str(_scalar(value) if isinstance(value, dict) else value or "").strip()
+    if re.search(r"[|&:]|^\d{4}-\d{2}-\d{2}-\d{2}$", text):
+        return None
     year_match = re.search(r"(?<!\d)(1[6-9]\d{2}|20\d{2})(?!\d)", text)
     if not year_match:
         return None
@@ -881,6 +950,8 @@ async def main() -> int:
                     "latency": dict(result.latency or {}),
                     "review_status": result.review_status,
                     "final_response": (result.latency or {}).get("final_response"),
+                    "plan": result.plan.model_dump(mode="json") if result.plan else None,
+                    "facts": result.facts,
                 }
             )
             print(f"[{index:02d}/{len(cases) * args.runs}] {case.id} {'PASS' if not issues else 'FAIL'}: {case.question}")

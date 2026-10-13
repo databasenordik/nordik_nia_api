@@ -176,6 +176,7 @@ def _validate_ops_and_fields(
             for leaf in predicate.leaves():
                 if leaf.operator is None:
                     raise PlanValidationError("filter leaf has no operator", code="op_contract")
+                validate_filter_value(leaf.operator.value, leaf.value)
                 _validate_predicate(leaf.field, leaf.operator.value, file_ids, catalog)
         for name in (step.companion_field, step.interval_start, step.interval_end):
             if name:
@@ -244,6 +245,25 @@ def _validate_op_contract(step: PlanStep) -> None:
         raise PlanValidationError(
             f"{step.op.value} requires interval_start and interval_end", code="op_contract"
         )
+
+
+def validate_filter_value(operator: str, value) -> None:
+    """Reject malformed operands instead of executing them as zero matches."""
+    if operator != "DATE_RANGE":
+        return
+    from app.normalization.date_expression import bounds, date_groups
+
+    if not isinstance(value, list | tuple) or len(value) != 2:
+        raise PlanValidationError("DATE_RANGE requires two date endpoints in a list", code="operator")
+    intervals = []
+    for endpoint in value:
+        groups = date_groups(endpoint)
+        interval = bounds(groups[0][0]) if len(groups) == 1 and len(groups[0]) == 1 else None
+        if interval is None or groups[0][0].flags or groups[0][0].range_end:
+            raise PlanValidationError("DATE_RANGE endpoints must be valid recorded dates", code="operator")
+        intervals.append(interval)
+    if intervals[0][0] > intervals[1][1]:
+        raise PlanValidationError("DATE_RANGE start must not be after its end", code="operator")
 
 
 _NUMERIC_TYPES = frozenset({"number", "numeric", "integer", "float", "int"})

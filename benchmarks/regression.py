@@ -135,6 +135,10 @@ async def _answer_once(
         "planner_usage": result.planner_usage,
         "detail": (result.detail or "")[:300],
         "ops": result.plan.op_names() if result.plan is not None else [],
+        "plan": result.plan.model_dump(mode="json") if result.plan is not None else None,
+        "facts": result.facts,
+        "latency": dict(result.latency or {}),
+        "review_attempts": result.review_attempts,
     }
     return result.answer, meta, result
 

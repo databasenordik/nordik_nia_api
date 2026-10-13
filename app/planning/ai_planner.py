@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -13,7 +14,11 @@ from pydantic import ValidationError
 
 from app.config import get_settings
 from app.llm.base import ReasoningProvider, StructuredOutputResult, TransientReasoningError
-from app.planning.ai_catalog_coerce import coerce_planned_turn, coerce_stated_requirements
+from app.planning.ai_catalog_coerce import (
+    coerce_planned_turn,
+    coerce_stated_requirements,
+    source_projection,
+)
 from app.planning.ai_turn_schema import (
     AggregateRequirement,
     CompanionRequirement,
@@ -88,14 +93,15 @@ class PlannerContractError(ValueError):
 # the catalog -- never that the user was unclear -- so a second pass with the error
 # as context is a better answer than asking the researcher to restate a clear
 # question. access_restricted is deliberately absent: that one always fails closed.
-_REVIEWABLE_VALIDATION_CODES = frozenset(
+_ACTION_REPAIR_CODES = frozenset(
     # "operator" belongs with "unknown_field": both are the planner naming something the
     # registry does not support on that field, and both are fixable by looking at the
     # catalog again. Only unknown_field was salvageable, so "list students whose names
     # start with Z" died on STARTS_WITH being unavailable for the field it chose, with a
     # perfectly good alternative field on the same list.
-    {"unknown_field", "operator", "dropped_requirement", "response_contract", "op_contract"}
+    {"unknown_field", "operator", "response_contract", "op_contract", "order_contract", "name_contract", "goal_contract", "category_contract"}
 )
+_REVIEWABLE_VALIDATION_CODES = _ACTION_REPAIR_CODES | {"dropped_requirement"}
 
 PLANNER_UNAVAILABLE_TEXT = {
     "text": "NIA's planning service is temporarily unavailable. Please try again in a moment.",
@@ -110,6 +116,16 @@ MAX_PLANNER_QUESTION_CHARS = 4000
 MAX_PLANNER_MEMORY_CHARS = 6000
 
 AI_PLANNER_SYSTEM = """You are Nia's natural-language planner for research records.
+
+Names use First Name, Middle Name, and Last Name. Dates use | for alternatives (one date is
+correct) and & for multiple real events (all dates are correct). Blank or zero components
+are unknown. A colon (:) denotes an inclusive date range. YYYY-MM-DD-DD denotes two possible
+dates in the same month, not a range. Date filters return definite matches: every alternative must qualify; any real
+event may qualify. Preserve these meanings and do not pick the first date as certain.
+For a year of an admission/death/event, use YEAR_EQUALS on the base date field. A derived
+date_year is available only when all recorded dates have the same year.
+The date_event_count fields count guaranteed recorded dated events: AND events count
+separately, OR alternatives count once. Use the admission event count for repeated admissions.
 
 1. TRUST AND ROUTING
 SELECTED LIST, SELECTED FIELDS, OTHER AUTHORIZED LIST NAMES, ACTIVE QUERY, MODE, and
@@ -188,7 +204,8 @@ Use only operators listed in the chosen field's ops.
   (A OR B) AND C -> [A,C],[B,C]. (A AND B) OR C -> [A,B],[C]. Never mix filters and filter_groups.
   Maximum 8 groups and 8 filters per group. If exact representation exceeds this or requires logic other
   than AND/OR, clarify with unsupported_logic; never approximate.
-- A person's name lookup uses CONTAINS, not EQUALS.
+- A person's name lookup uses CONTAINS, not EQUALS. Preserve every name component supplied
+  by the user: Albert Penance requires both Albert AND Penance; never search Albert alone.
 - Emit filter values as concepts, not sentence fragments. Preserve negation polarity, every stated
   condition, and every requested value/bound/threshold. For flat filters preserve the stated filter_logic;
   for filter_groups preserve each condition in its correct conjunction. Never broaden a condition.
@@ -196,6 +213,7 @@ Use only operators listed in the chosen field's ops.
 5. GOAL SELECTION
 Choose by requested meaning, not isolated trigger words:
 - number of matching records -> goal=count.
+  "How many <field> contain <value>?" counts matching record cells, not a distribution.
 - number of distinct/unique/different values of a field -> goal=aggregate,
   aggregate.function=count_distinct, aggregate.field=<field>.
 - the distinct/unique/different values themselves -> goal=distinct, field in group_by; return values only,
@@ -214,8 +232,9 @@ Choose by requested meaning, not isolated trigger words:
 - which/list/show records -> goal=list. Always project the identity field, plus every field explicitly
   named by the question, including fields named only in conditions. If no other field is named, project
   identity only. Apart from the required identity field, never add an unmentioned field.
-- show all information for NAME -> goal=list, CONTAINS on identity, and every SELECTED FIELD in
-  requested_fields. This is not a dossier or narrative synthesis.
+- show all information for NAME -> goal=list, CONTAINS on every supplied name component,
+  and requested_fields=["*"]. The compiler expands * to every source attribute on the selected
+  list. Do not manually enumerate or omit attributes. This is not a dossier or narrative synthesis.
 
 6. GROUPED MISSING VALUES
 include_missing puts records with no grouped-field value in their own bucket.
@@ -256,6 +275,9 @@ asks for a narrative, summary, explanation, or dossier.
 Clarify rather than guess when the request cannot be represented safely, including an unavailable field,
 materially ambiguous field/value/range/reference/source, incomplete voice input, unidentified required
 interval bounds, unsupported Boolean logic, or confidence below MIN_CONFIDENCE.
+Confidence measures understanding of the request, not whether a matching record exists or whether
+a supplied name is spelled correctly. Plan explicit name literals as supplied; retrieval checks
+matches and handles spelling suggestions. An unfamiliar name alone is not an ambiguous request.
 
 9. OUTPUT CONTRACT
 stated_requirements must enumerate every understood executable requirement at the same granularity as the
@@ -307,8 +329,13 @@ VERIFY
   distribution/counts per category -> rank. Category with the most records -> rank by category count;
   maximum/minimum stored field value -> max/min aggregate. Do not confuse those. Same-value records present
   during overlapping periods require duplicates with group_by, interval bounds, and overlap count.
+- Confidence assesses understanding of the requested operation, not the existence of matching records.
+  An explicit unfamiliar or misspelt name still has a clear lookup meaning. Retrieval resolves matches.
+  A corrected executable plan must meet MIN_CONFIDENCE. Missing data does not make a clear request
+  ambiguous. If actual ambiguity prevents understanding the operation, return needs_clarification.
 - Lists: project identity plus every explicitly named field, including condition fields. Identity is the one
-  allowed projection even when not named. "Show all information" projects every selected field.
+  allowed projection even when not named. "Show all information" uses requested_fields=["*"],
+  expanded by trusted code to every source attribute. Reconstruct that projection as ["*"].
 - Missing groups: complete distribution -> include_missing=true; superlative/top-N over recorded values ->
   include_missing=false unless explicitly overridden.
 - Sort/windows: never invent sort. Explicit order wording requests sorting; bare "by <field>" may be
@@ -614,16 +641,43 @@ class AIPlanner:
                 result = await self._call(
                     self._review_provider, AI_REVIEW_SYSTEM, user, PlanReviewResponse
                 )
+            except ValidationError as exc:
+                # A malformed action reference is repairable without guessing its target.
+                # Ask for a new review; never remap or accept the invalid requirement.
+                if not any(error["msg"] == "Value error, stated requirement action_index is out of range"
+                           for error in exc.errors(include_input=False)):
+                    raise
+                attempts = 2
+                result = await self._call(
+                    self._review_provider, AI_REVIEW_SYSTEM,
+                    user + "\nYour previous review had an out-of-range action_index. Return a new "
+                    "review with zero-based action indexes referring to the actions in its plan. "
+                    "Do not drop requirements or guess an index. All semantic checks still apply.",
+                    PlanReviewResponse,
+                )
             except TransientReasoningError as exc:
                 # The same rule as the primary call: a busy node or a dropped connection says
                 # nothing about the plan. Review is mandatory before execution, so without a
                 # second attempt one 503 turned an answerable question into "unavailable".
                 logger.warning("ai planner review transient failure: %s", _sanitize_error(exc))
+                await asyncio.sleep(0.25)
                 attempts = 2
                 result = await self._call(
                     self._review_provider, AI_REVIEW_SYSTEM, user, PlanReviewResponse
                 )
             verdict = result.value.root
+            usage = _usage_from(result)
+            if verdict.verdict == "complete" and validation_error.split(":", 1)[0] in _ACTION_REPAIR_CODES:
+                # These trusted contradictions require a changed action. Approval of
+                # the unchanged invalid candidate cannot resolve them.
+                attempts += 1
+                result = await self._call(self._review_provider, AI_REVIEW_SYSTEM,
+                    user + "\nThe unchanged candidate still violates the trusted contract. "
+                    "Return corrected with the required action change and independent requirements, "
+                    "or needs_clarification for actual ambiguity. Complete cannot repair this error.",
+                    PlanReviewResponse)
+                usage = _merge_usage_dicts(usage, _usage_from(result))
+                verdict = result.value.root
             metadata: dict[str, Any] = {
                 "verdict": verdict.verdict,
                 "reconstructed_requirements": list(verdict.reconstructed_requirements),
@@ -643,7 +697,7 @@ class AIPlanner:
                 attempts=attempts,
                 duration_ms=(time.perf_counter() - started) * 1000,
                 output_metadata=metadata,
-                usage=_usage_from(result),
+                usage=usage,
             )
         except ValidationError as exc:
             error = _sanitize_error(exc)
@@ -1022,11 +1076,76 @@ def _keep_primary_confidence(corrected: PlannedTurn, original: PlannedTurn | Non
     return corrected.model_copy(update={"confidence": original.confidence})
 
 
+def _ascending_alphabetical(question: str) -> bool:
+    return bool(re.search(r"\balphabetic(?:al(?:ly)?)?\b", question, re.I) and not re.search(
+        r"\b(?:reverse|descending)\b|\bz\s*(?:to|-)\s*a\b", question, re.I))
+
+
+def _canonicalize_order(planned: PlannedTurn, question: str) -> PlannedTurn:
+    """Alphabetical means ASC unless explicitly reversed; windows choose first/last.
+
+    This mechanical constraint comes directly from the user's explicit order. Apply it
+    to actions and requirement declarations alike, without changing fields or populations.
+    """
+    if not _ascending_alphabetical(question):
+        return planned
+    indexes = {i for i, action in enumerate(planned.actions)
+               if isinstance(action, PlannedQueryAction) and action.goal == "list" and action.sort_by}
+    actions = [action.model_copy(update={"sort_direction": "asc"}) if i in indexes else action
+               for i, action in enumerate(planned.actions)]
+    requirements = [item.model_copy(update={"direction": "asc"})
+                    if isinstance(item, SortingRequirement) and item.action_index in indexes else item
+                    for item in planned.stated_requirements]
+    return planned.model_copy(update={"actions": actions, "stated_requirements": requirements})
+
+
+def _validate_explicit_request(question: str, turn: TurnPlan, plan, catalog: FieldCatalog) -> None:
+    """Check two explicit transport-independent constraints against executable slots.
+
+    Reject contradictions for review; never add a condition or choose a person here.
+    """
+    if re.search(r"\bunknown\b", question, re.I) and not re.search(r"\b(?:missing|blank|unrecorded|empty)\b", question, re.I):
+        for step in plan.steps:
+            for predicate in step.where:
+                for leaf in predicate.leaves():
+                    if leaf.operator.value != "IS_UNKNOWN":
+                        continue
+                    spec = catalog.resolve_field(plan.scope.file_ids[0], leaf.field)
+                    if spec and any(str(value).casefold() == "unknown" for value in spec.validation_rules.get("recorded_values", [])):
+                        raise PlanValidationError(f"{leaf.field} records a category named unknown. The request asks for that recorded category, not an empty value. Match the category by equality.", code="category_contract")
+    if re.match(r"^\s*how\s+many\b", question, re.I):
+        distinct = bool(re.search(r"\b(?:distinct|unique|different)\b", question, re.I))
+        if distinct and any(action.goal == "count" for action in turn.query_actions()):
+            raise PlanValidationError("The request asks for a number of distinct values, not a number of records. Use count_distinct on the requested field.", code="goal_contract")
+        if (not distinct and re.search(r"\bcontain(?:s|ing)?\b", question, re.I)
+                and not re.search(r"\b(?:per|each|by|distribution|breakdown)\b", question, re.I)
+                and any(action.goal in {"rank", "distinct", "list"}
+                        or (action.aggregate and action.aggregate.function == "count_distinct")
+                        for action in turn.query_actions())):
+            raise PlanValidationError("How many matching field cells asks for a record count, not distinct values, a ranking, or a distribution. Preserve the filters and use goal=count.", code="goal_contract")
+    if _ascending_alphabetical(question):
+        if any(action.sort_direction == "desc" for action in turn.query_actions()):
+            raise PlanValidationError("Alphabetical order is ascending. Last N uses anchor=end; do not reverse the order.", code="order_contract")
+    match = re.search(r"\ball\s+(?:information|info|details)\s+(?:for|about|on)\s+([\w .'-]+)[?.!]*$", question, re.I)
+    if match:
+        from app.execution.name_correction import searched_name
+        actual = searched_name(plan, catalog)
+        supplied = match[1].strip().split()
+        if actual and 1 < len(supplied) <= 4 and all(not any(ch.isdigit() for ch in token) for token in supplied):
+            tokens = set(re.findall(r"\w+", actual.casefold()))
+            if not set(re.findall(r"\w+", match[1].casefold())) <= tokens:
+                raise PlanValidationError("The explicit person lookup must preserve every supplied name component: " + match[1], code="name_contract")
+
+
 def _reconstructed_requirements(
-    review: PlannerStageResult | None, catalog: FieldCatalog, selected_file_id: int
+    review: PlannerStageResult | None, catalog: FieldCatalog, selected_file_id: int, question: str = ""
 ) -> list[StatedRequirement]:
     raw = list(((review.output_metadata if review else None) or {}).get("reconstructed_requirements") or [])
-    return coerce_stated_requirements(raw, catalog, selected_file_id)
+    requirements = coerce_stated_requirements(raw, catalog, selected_file_id, question)
+    if _ascending_alphabetical(question):
+        requirements = [item.model_copy(update={"direction": "asc"})
+                        if isinstance(item, SortingRequirement) else item for item in requirements]
+    return requirements
 
 
 def _reconstruction_mismatch(detail: str) -> PlanValidationError:
@@ -1610,7 +1729,7 @@ def _safe_active_query_json(context: ConversationContext) -> str:
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
-def _compact_planned_turn_json(planned: PlannedTurn) -> str:
+def _compact_planned_turn_json(planned: PlannedTurn, *, source_fields: list[str] | None = None) -> str:
     """Small review payload that keeps semantic discriminators but drops inert defaults.
 
     ``model_dump_json()`` serializes every optional/default field on every action. For a
@@ -1621,6 +1740,11 @@ def _compact_planned_turn_json(planned: PlannedTurn) -> str:
     contract.
     """
     payload = planned.model_dump(mode="json", exclude_defaults=True, exclude_none=True)
+    if source_fields:
+        for item in [*payload.get("actions", []), *payload.get("stated_requirements", [])]:
+            fields = item.get("requested_fields")
+            if isinstance(fields, list) and len(fields) == len(source_fields) and set(fields) == set(source_fields):
+                item["requested_fields"] = ["*"]
     def keep_filter_null_values(rendered: Any, original: Any) -> None:
         """Unary predicates are explicit about having no value.
 
@@ -1767,17 +1891,19 @@ def _review_user_prompt(
         "MEMORY:",
         json.dumps(memory, ensure_ascii=False) if memory else '""',
         "QUESTION: " + json.dumps(safe_question, ensure_ascii=False),
+        f"MIN_CONFIDENCE: {get_settings().planner_min_confidence}",
         "CANDIDATE PLAN:",
-        _compact_planned_turn_json(planned),
+        _compact_planned_turn_json(planned, source_fields=source_projection(catalog, selected_file_id)),
     ]
     if validation_error:
         lines.extend(
             [
                 "TRUSTED VALIDATION ERROR:",
                 validation_error,
-                "Correct the plan so every field is in SELECTED FIELDS and represents the fact asked about. "
-                "Do not substitute a related field. For category-frequency questions, group_by is the "
-                "category field, never count.",
+                "Correct the exact contradiction stated above. Preserve every requested condition "
+                "and use only SELECTED FIELDS. Do not add conditions, substitute related fields, "
+                "or alter the requested goal. Return independently reconstructed requirements "
+                "that match the corrected executable plan.",
             ]
         )
     if unaccounted:
@@ -1881,6 +2007,7 @@ def filter_conversation_for_dataset(
     return ConversationContext(
         active_plan=context.active_plan,
         active_query_text=context.active_query_text if active is not None else "",
+        active_question=context.active_question if active is not None else "",
         memory_text=context.memory_text,
         active_query=active,
         topic_frames=frames,
@@ -1911,12 +2038,28 @@ def _trusted_ai_fast_route(
     """
     has_active = context.active_query is not None or bool(context.topic_frames)
     with timing.measure("trusted_fast_path_ms"):
-        candidate = trusted_fast_turn(
-            question,
-            has_active_query=has_active,
-            catalog=catalog,
-            last_assistant_text=context.last_assistant_text,
-        )
+        if (context.active_query is not None and context.active_question and context.active_question.strip()
+                and " ".join(question.split()).casefold()
+                == " ".join(context.active_question.split()).casefold()):
+            # An exact repeat requests the same validated query. Re-execute it against
+            # the current access-gated database rather than reconstructing a refinement.
+            candidate = TurnPlan(normalized_request=question,
+                                 actions=[VerifyPreviousAction()],
+                                 final_response="deterministic", confidence=1.0)
+        elif (context.active_query is not None
+              and context.active_query.goal == "distinct"
+              and context.active_query.group_value_part == "base_name"
+              and re.fullmatch(r"(?:list|show|include|with)\s+(?:them\s+)?(?:with\s+)?(?:the\s+)?(?:hash|band)\s+numbers[?.!]*", question.strip(), re.I)):
+            candidate = TurnPlan(normalized_request=question,
+                                 actions=[ModifyPreviousAction(group_value_part="raw")],
+                                 final_response="deterministic", confidence=1.0)
+        else:
+            candidate = trusted_fast_turn(
+                question,
+                has_active_query=has_active,
+                catalog=catalog,
+                last_assistant_text=context.last_assistant_text,
+            )
     if candidate is None or candidate.query_actions():
         return None
     # Pagination is only mechanically defined for a list frame. On a count/rank/statistic,
@@ -1983,6 +2126,7 @@ def _trusted_ai_fast_route(
                 active_query=context.active_query,
                 frames=_frame_map(context),
             )
+        _validate_explicit_request(question, validated, plan, catalog)
         with timing.measure("predicate_contract_ms"):
             validate_predicate_contract(plan)
         with timing.measure("value_expansion_ms"):
@@ -2068,6 +2212,7 @@ async def plan_user_turn_ai(
         context = ConversationContext(
             active_plan=context.active_plan,
             active_query_text=context.active_query_text,
+            active_question=context.active_question,
             memory_text=memory_text,
             active_query=context.active_query,
             topic_frames=context.topic_frames,
@@ -2227,12 +2372,13 @@ async def _validate_and_route(
     common: dict[str, Any],
     authorized_options: list[AuthorizedDatasetOption] | None = None,
     already_reviewed_correction: bool = False,
+    semantic_retry_used: bool = False,
 ) -> PlanRouteResult:
     settings = get_settings()
     planned = result.planned
     bound = result.bound
     assert planned is not None and bound is not None
-    coerced = coerce_planned_turn(planned, catalog, selected_file_id)
+    coerced = coerce_planned_turn(_canonicalize_order(planned, question), catalog, selected_file_id, question)
     if coerced is not planned:
         planned = coerced
         bound = bind_scope(planned, selected_file_id)
@@ -2255,7 +2401,7 @@ async def _validate_and_route(
     has_active = context.active_query is not None or bool(context.topic_frames)
     try:
         original_for_diff = (
-            coerce_planned_turn(result.original_planned, catalog, selected_file_id)
+            coerce_planned_turn(_canonicalize_order(result.original_planned, question), catalog, selected_file_id, question)
             if already_reviewed_correction and result.original_planned is not None
             else None
         )
@@ -2296,7 +2442,7 @@ async def _validate_and_route(
         reconstructed: list[StatedRequirement] | None = None
         if already_reviewed_correction and result.review is not None:
             reconstructed = _without_list_identity(
-                _reconstructed_requirements(result.review, catalog, selected_file_id),
+                _reconstructed_requirements(result.review, catalog, selected_file_id, question),
                 removed_conditions,
                 catalog=catalog,
                 selected_file_id=selected_file_id,
@@ -2443,6 +2589,7 @@ async def _validate_and_route(
                 active_query=context.active_query,
                 frames=_frame_map(context),
             )
+        _validate_explicit_request(question, validated, plan, catalog)
         with timing.measure("predicate_contract_ms"):
             validate_predicate_contract(plan)
         if (
@@ -2530,7 +2677,7 @@ async def _validate_and_route(
                     verdict = "complete"
                 if verdict == "complete":
                     reconstructed = _without_list_identity(
-                        _reconstructed_requirements(review_stage, catalog, selected_file_id),
+                        _reconstructed_requirements(review_stage, catalog, selected_file_id, question),
                         removed_conditions,
                         catalog=catalog,
                         selected_file_id=selected_file_id,
@@ -2733,6 +2880,36 @@ async def _validate_and_route(
     except PlanValidationError as exc:
         if exc.code == "access_restricted":
             raise
+        if exc.code == "review_reconstruction_mismatch":
+            common["review_status"] = "inconsistent"
+        if ((exc.code in {"review_reconstruction_mismatch", "review_correction_unverified"}
+             or (already_reviewed_correction and exc.code in _REVIEWABLE_VALIDATION_CODES))
+                and not semantic_retry_used
+                and planner is not None and settings.planner_self_review):
+            # A disagreement is never permission to weaken the contract. Give the
+            # independent reviewer one precise repair opportunity, then fail closed.
+            with timing.measure("ai_self_review_ms"):
+                repair = await planner._review(question, planned, catalog, selected_file_id,
+                    validation_error=f"{exc.code}: {exc}", authorized_options=authorized_options or [],
+                    context=context)
+            common["review_attempts"] = int(common.get("review_attempts") or 0) + repair.attempts
+            common["planner_total_model_calls"] = int(common.get("planner_total_model_calls") or 0) + repair.attempts
+            common["reasoning_calls"] = common["planner_total_model_calls"]
+            common["planner_usage"] = _merge_usage_dicts(common.get("planner_usage") or {}, repair.usage)
+            metadata = repair.output_metadata or {}
+            candidate = metadata.get("plan") if metadata.get("verdict") == "corrected" else planned
+            if repair.status == "ok" and metadata.get("verdict") in {"complete", "corrected"} and isinstance(candidate, PlannedTurn):
+                candidate = _keep_primary_confidence(candidate, planned)
+                common["review_status"] = "repaired_reconstruction"
+                return await _validate_and_route(
+                    AIPlanningResult(planned=candidate, bound=bind_scope(candidate, selected_file_id),
+                        primary=result.primary, review=repair, review_status="repaired_reconstruction",
+                        status="planned", original_planned=result.original_planned or planned),
+                    planner=planner, question=question, scope=scope, catalog=catalog,
+                    authorized_options=authorized_options, selected_file_id=selected_file_id,
+                    context=context, input_mode=input_mode, normalized=normalized,
+                    timing=timing, common=common, already_reviewed_correction=True,
+                    semantic_retry_used=True)
         if (
             exc.code in _REVIEWABLE_VALIDATION_CODES
             and planner is not None
@@ -2746,7 +2923,7 @@ async def _validate_and_route(
                     result.planned,
                     catalog,
                     selected_file_id,
-                    validation_error=str(exc),
+                    validation_error=f"{exc.code}: {exc}",
                     authorized_options=authorized_options or [],
                     context=context,
                 )

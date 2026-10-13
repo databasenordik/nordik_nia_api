@@ -118,6 +118,19 @@ class TurnResult:
 class AssistantTurnService:
     """Shared Assistant Core entry point for text and, later, voice."""
 
+    async def _refresh_potential_memory(self, conversation: ConversationRecord) -> None:
+        if conversation.selected_file_id != 94:
+            return
+        revision = await self._gateway.potential_access_revision()
+        if conversation.row_access_revision != revision:
+            conversation.rolling_summary = ""
+            conversation.recent_turns = [item for item in conversation.recent_turns if item.get("role") == "user"]
+            conversation.frames.clear()
+            conversation.result_sets.clear()
+            conversation.active_frame_key = None
+            conversation.last_action_keys.clear()
+            conversation.row_access_revision = revision
+
     def __init__(
         self,
         gateway: DataGateway,
@@ -298,6 +311,7 @@ class AssistantTurnService:
                     selected_file_id=selected,
                 )
             conversation.selected_file_id = selected
+            await self._refresh_potential_memory(conversation)
             await self._store.save(conversation)
         elif conversation.selected_file_id != selected:
             return TurnResult(
@@ -312,6 +326,7 @@ class AssistantTurnService:
                 suggested_file_id=selected,
             )
 
+        await self._refresh_potential_memory(conversation)
         # A pinned conversation stays on its list. Naming another list, or naming a
         # field only that list carries, is answered with a switch suggestion rather
         # than by silently answering from the wrong records.
@@ -592,6 +607,7 @@ class AssistantTurnService:
                 review_status="skipped",
             )
 
+        await self._refresh_potential_memory(conversation)
         earlier = _question_being_corrected(conversation, selected, question)
         if earlier is not None:
             # The paste is a correction of an earlier answer, not a question: ask that one
@@ -1217,7 +1233,7 @@ class AssistantTurnService:
             answer = refinement.compose(answer)
         if self._turn_preface:
             answer = f"{self._turn_preface}\n\n{answer}"
-        if route is not None and route.turn_plan is not None and route.turn_plan.verify_actions():
+        if not self._turn_preface and route is not None and route.turn_plan is not None and route.turn_plan.verify_actions():
             answer = _verify_preface(conversation, execution) + answer
         if ack:
             answer = f"{ack} {answer}".strip()
@@ -2560,6 +2576,7 @@ def _conversation_context(conversation: ConversationRecord) -> ConversationConte
     return ConversationContext(
         active_plan=None,
         active_query_text=(frame.topic if frame else ""),
+        active_question=((frame.question or "") if frame else ""),
         memory_text=_memory_text(conversation),
         active_query=_active_query_from_frame(frame),
         topic_frames=tuple(_frame_payload(item) for item in conversation.frames.values()),
