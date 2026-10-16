@@ -68,6 +68,8 @@ class ActionResult:
     stats: FieldStats | None = None
     stats_field: str | None = None
     stats_value_part: str | None = None
+    numeric_known_count: int | None = None
+    numeric_record_count: int | None = None
     duplicates: list[DuplicateGroup] = field(default_factory=list)
     duplicate_field: str | None = None
     completeness: list[CompletenessRow] = field(default_factory=list)
@@ -269,8 +271,10 @@ class QueryExecutor:
             stats_field = step.fields[0] if step.fields else None
             if not stats_field:
                 raise PlanExecutionError("STATS requires a field")
+            spec = self._catalog.resolve_field(file_ids[0], stats_field)
+            part = step.value_part or ("number" if spec and spec.semantic_type == "number" else None)
             stats = await self._gateway.field_stats(
-                scope, file_ids, predicates, stats_field, value_part=step.value_part
+                scope, file_ids, predicates, stats_field, value_part=part
             )
             return StepResult(
                 value={
@@ -713,7 +717,9 @@ class QueryExecutor:
             else:
                 result_value = max(value for value, _count in numbers)
             key = step.op.value.lower()
-            return StepResult(value={key: result_value, "predicates": predicates})
+            return StepResult(value={key: result_value, "predicates": predicates, "stats_field": field_name,
+                "numeric_known_count": sum(count for _, count in weighted_values),
+                "numeric_record_count": sum(grouped_values.values())})
         if step.op is PlanOp.GET_RAW_FIELDS:
             ids = [hit.source_row_id for hit in hits]
             keys = _raw_fetch_keys(file_ids, self._catalog)
@@ -835,10 +841,11 @@ def _typed_aggregate_value(value: Any, semantic_type: str) -> int | float | str 
         from app.normalization.date_expression import shared_component
         return shared_component(text, "year")
     if semantic_type == "number":
-        match = re.search(r"-?\d+(?:\.\d+)?", text)
-        if match is None:
+        from app.execution.derivations import numeric_value
+
+        number = numeric_value(text, "number")
+        if number is None:
             return None
-        number = float(match.group(0))
         return int(number) if number.is_integer() else number
     return text
 
@@ -1008,6 +1015,8 @@ def _accumulate(bucket: ActionResult, value: dict[str, Any]) -> None:
         "percentage",
         "stats_field",
         "stats_value_part",
+        "numeric_known_count",
+        "numeric_record_count",
         "duplicate_field",
         "completeness_direction",
         "interval_fields",

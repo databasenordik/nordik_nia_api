@@ -102,14 +102,43 @@ def test_one_person_one_edit_away_is_a_typo():
     assert _suggest(("Albert Penance", 1)).certain.display_name == "Albert Penance"
 
 
-def test_two_edits_away_is_asked_about_not_assumed():
-    """Two or three letters out is a guess, and guessing silently would be worse."""
-    assert _suggest(("Albert Penance", 2)).certain is None
+def test_the_only_person_within_reach_is_answered_at_two_edits_too():
+    """Nothing is being guessed when there is nothing else it could be.
+
+    The index is searched with a bounded edit distance per word, so one candidate means no
+    other person is within that bound. Asking "did you mean Rita Abotossaway?" of a search
+    for "Rita Abottasaway" put a question whose answer was already known, and the answer
+    states the correction either way.
+    """
+    assert _suggest(("Albert Penance", 2)).certain.display_name == "Albert Penance"
 
 
-def test_several_people_equally_close_are_asked_about():
-    """"Fisherr" is one edit from six different Fishers; only the researcher knows which."""
-    assert _suggest(("Bertha F Fisher", 1), ("Charles Fisher", 1)).certain is None
+def test_several_people_spelt_differently_are_asked_about():
+    """"Penence" is close to two different names; only the researcher knows which."""
+    correction = _suggest(("Bertha F Fisher", 1), ("Charles Pike", 1))
+    assert correction.certain is None
+    assert correction.corrected_word is None
+
+
+def test_one_surname_shared_by_every_candidate_needs_no_question():
+    """A surname is typed to ask about a family, not to pick one of its children."""
+    correction = NameCorrection(
+        searched_for="Abotossay",
+        suggestions=tuple(
+            NameSuggestion(display_name=name, file_id=49, source_row_id=index, distance=2)
+            for index, name in enumerate(
+                ["Christine Abotossaway", "Clayton Abotossaway", "Rita Abotossaway"]
+            )
+        ),
+    )
+    assert correction.certain is None
+    assert correction.corrected_word == "Abotossaway"
+
+
+def test_a_multiword_search_is_not_corrected_one_word_at_a_time():
+    """Which person was meant is the question again as soon as a given name is in play."""
+    correction = _suggest(("Albert Penance", 2), ("Alberta Penance", 2))
+    assert correction.corrected_word is None
 
 
 def test_a_name_the_list_records_is_never_corrected():

@@ -1,4 +1,4 @@
-"""Accuracy and speed for each offered model, on the same 74 questions.
+"""Accuracy and speed for each offered model, on the active database matrix.
 
 The models on the bridge are not interchangeable. The default answers directly; the newer
 ones reason first, which on our planner schema is the difference between 6 and 35 seconds

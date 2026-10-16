@@ -3,7 +3,6 @@ from functools import wraps
 from app.execution.filters import apply_predicates
 from app.planning.plan_schema import FilterOperator, Predicate
 
-
 # These gateway methods all take scope, file_ids, predicates as their first
 # three arguments. Enforce the UI selection at the data boundary, independently
 # of whether the planner includes a community in its generated plan.

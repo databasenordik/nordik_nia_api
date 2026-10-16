@@ -81,7 +81,7 @@ SELECT
     d.id,
     d.school_name AS name,
     ARRAY_REMOVE(
-        ARRAY[d.school_name] || COALESCE(regexp_split_to_array(d.name_variants, '\\s*[;,]\\s*'), ARRAY[]::TEXT[]),
+        ARRAY[d.school_name] || COALESCE(regexp_split_to_array(d.name_variants, '\s*[;,]\s*'), ARRAY[]::TEXT[]),
         NULL
     ) AS variants
 FROM public.day_schools d
@@ -91,7 +91,7 @@ SELECT
     h.id,
     h.hospital_name AS name,
     ARRAY_REMOVE(
-        ARRAY[h.hospital_name] || COALESCE(regexp_split_to_array(h.name_variants, '\\s*[;,]\\s*'), ARRAY[]::TEXT[]),
+        ARRAY[h.hospital_name] || COALESCE(regexp_split_to_array(h.name_variants, '\s*[;,]\s*'), ARRAY[]::TEXT[]),
         NULL
     ) AS variants
 FROM public.indian_hospitals h

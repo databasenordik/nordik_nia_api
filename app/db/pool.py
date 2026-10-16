@@ -10,6 +10,11 @@ async def init_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
         settings = get_settings()
+        from app.db.privilege_selftest import assert_runtime_isolation
+
+        # All application entry points, including voice, share this boundary.
+        # Validate once before creating the pool, never during each user turn.
+        await assert_runtime_isolation(settings.assistant_database_url)
         _pool = await asyncpg.create_pool(
             dsn=settings.assistant_database_url,
             min_size=settings.db_pool_min,

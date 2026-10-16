@@ -1799,7 +1799,7 @@ def _closest_name_slot(value: str, parts: NameParts) -> str:
     return best_slot if best_ratio >= SLASH_SPELLING_THRESHOLD else ""
 
 
-def merge_name_comments(parts: NameParts, comments: str) -> NameParts:
+def merge_name_comments(parts: NameParts, comments: str, *, bare_variants: bool = False) -> NameParts:
     """Fold a row's labelled name comments into the parts parsed from its name cells."""
     if not (comments or "").strip():
         return parts
@@ -1838,6 +1838,18 @@ def merge_name_comments(parts: NameParts, comments: str) -> NameParts:
         if not value:
             continue
         if not slot:
+            if bare_variants:
+                # A source column explicitly designated for name variations may
+                # contain a bare name, optionally followed by its translation.
+                # Keep its type unspecified; never infer an Indigenous/spirit name.
+                bare_name = re.sub(r"\s*\([^)]*\)\s*$", "", clause).strip()
+                words = bare_name.split()
+                if (1 <= len(words) <= 4 and all(
+                    re.fullmatch(r"[^\W\d_][\w'’\-]*", word) and word[:1].isupper()
+                    for word in words
+                )):
+                    collected["alias"].append(bare_name)
+                    continue
             # Unlabelled prose is kept, but only where nothing can match a person by it.
             collected["residue"].append(clause)
             continue

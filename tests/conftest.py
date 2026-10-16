@@ -5,6 +5,7 @@ Legacy planner tests stay on the rollback path unless a test opts into AI.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +22,10 @@ def _legacy_planner_unless_ai_requested(request: pytest.FixtureRequest, monkeypa
     monkeypatch.setenv("PLANNER_MODE", "ai" if wants_ai else "legacy")
     monkeypatch.setenv("LIVEKIT_API_KEY", "unit-test-key")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "unit-test-livekit-secret-that-is-long-enough-32")
+    if os.environ.get("RUN_DB_TESTS") != "1" and not os.environ.get("ASSISTANT_TEST_DATABASE_URL"):
+        # Offline UI/auth tests must not accidentally connect to the developer's
+        # .env database when Docker becomes reachable. Integration tests opt in.
+        monkeypatch.setenv("ASSISTANT_DATABASE_URL", "postgresql://offline:offline@127.0.0.1:1/offline")
     # Settings reads ../.env, so whatever the developer has deployed against leaks in here.
     # Pointing a backend at a tunnel -- AUTH_COOKIE_SECURE=true for the cross-site cookie --
     # failed three tests that had nothing to do with the change: TestClient speaks http, so a

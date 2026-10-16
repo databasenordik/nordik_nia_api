@@ -31,12 +31,10 @@ async def lifespan(_: FastAPI):
     )
     try:
         await init_pool()
-        if settings.app_env == "production" or (
-            settings.fail_closed_on_privilege_error and settings.app_env != "test"
-        ):
-            from app.db.privilege_selftest import assert_runtime_isolation
-
-            await assert_runtime_isolation()
+        # init_pool calls assert_runtime_isolation before accepting any connection.
+    except PermissionError:
+        await close_pool()
+        raise
     except Exception:
         await close_pool()
         if settings.app_env == "production":

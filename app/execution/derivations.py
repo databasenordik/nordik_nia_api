@@ -69,6 +69,11 @@ def numeric_value(value: Any, part: str | None = None) -> float | None:
     text = "" if value is None else str(value).strip()
     if not text:
         return None
+    if part == "number":
+        # A typed measurement must be a number, not the first digits of a date,
+        # an uncertain value, or narrative text. Date-year extraction is explicit.
+        measurement = re.fullmatch(r"(-?\d+(?:\.\d+)?)(?:\s+(?:years?|yrs?|days?|months?))?", text, re.I)
+        return float(measurement[1]) if measurement else None
     if part is None and re.match(r"^\d{4}-\d{2}-\d{2}", text):
         year = shared_component(text, "year")
         return float(year) if year is not None else None

@@ -23,12 +23,13 @@ from app.observability.tracing import get_tracer  # noqa: E402
 from app.security.access_scope import AccessScope  # noqa: E402
 
 PROBES = [
+    # A control turn measures the greeting path; file IDs scope the remaining probes.
     (49, "hello"),
-    (49, "List the students whose surname is Jones."),
-    (49, "What is the most common community?"),
-    (91, "How many students are recorded as deceased?"),
-    (91, "Which students died of tuberculosis?"),
-    (94, "List the names in this list."),
+    (49, "List students whose last name is Jones."),
+    (49, "Which community has the most student records?"),
+    (91, "How many student records are there?"),
+    (91, "Which students have tuberculosis recorded as a cause of death?"),
+    (94, "Which students are recorded as being from Garden River?"),
 ]
 
 

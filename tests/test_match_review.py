@@ -176,7 +176,7 @@ def test_the_answer_keeps_the_exact_count_and_adds_the_reading():
         )
     )
     assert next(fact["value"] for fact in result.facts if fact["name"] == "count") == 2
-    assert "There are 2 students" in result.answer
+    assert "**2 students**" in result.answer
     assert "**1** fits and **1** does not" in result.answer
     assert "| Fits the question |" in result.answer
     assert result.inference is True

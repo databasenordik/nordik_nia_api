@@ -131,7 +131,7 @@ def test_a_word_count_names_the_field_and_the_words_it_matched():
         field="notes", operator=FilterOperator.CONTAINS_ANY, value=["transferred", "transfer"]
     )
     assert _answer(_count(0, predicate)) == (
-        'There are 0 students in the Student master list with "transferred" or "transfer" in notes.'
+        '**0 students** in the Student master list with "transferred" or "transfer" in notes.'
     )
 
 
@@ -154,4 +154,4 @@ def test_a_count_of_blank_values_says_so():
 
 def test_a_searched_name_is_not_repeated_in_the_sentence():
     predicate = Predicate(field="student_name", operator=FilterOperator.CONTAINS, value="Albert")
-    assert _answer(_count(1, predicate)) == "There is 1 student in the Student master list."
+    assert _answer(_count(1, predicate)) == "**1 student** in the Student master list."

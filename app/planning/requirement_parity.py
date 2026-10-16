@@ -698,6 +698,13 @@ def check_requirement_parity(planned: PlannedTurn, bound: TurnPlan) -> None:
     ):
         match_index = next((index for index, item in enumerate(unused) if _same(stated, item)), None)
         if match_index is None:
+            if any(_same(stated, item) for item in expressed):
+                raise PlanValidationError(
+                    "dropped_requirement: duplicate requirement already accounted for: "
+                    f"{original.text}. State each executable condition once; remove the duplicate "
+                    "requirement or express a genuinely different intended condition without changing the population.",
+                    code="dropped_requirement",
+                )
             raise PlanValidationError(
                 f"dropped_requirement: {original.text}",
                 code="dropped_requirement",

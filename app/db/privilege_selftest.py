@@ -32,25 +32,26 @@ async def assert_runtime_isolation(dsn: str | None = None) -> None:
     conn = await asyncpg.connect(dsn or settings.assistant_database_url)
     failures: list[str] = []
     try:
-        for table in FORBIDDEN_TABLES:
-            try:
-                await conn.fetch(f"SELECT * FROM public.{table} LIMIT 1")
-            except asyncpg.InsufficientPrivilegeError:
-                continue
-            except asyncpg.UndefinedTableError:
-                continue
-            else:
-                failures.append(f"assistant_runtime can SELECT public.{table}")
-
-        for view in FORBIDDEN_VIEWS:
-            try:
-                await conn.fetch(f"SELECT * FROM {view} LIMIT 1")
-            except asyncpg.InsufficientPrivilegeError:
-                continue
-            except asyncpg.UndefinedTableError:
-                continue
-            else:
-                failures.append(f"assistant_runtime can SELECT {view}")
+        # Inspect permissions without attempting to read even one restricted row.
+        # A misconfigured role must be detected before it can load content.
+        objects = [*(f"public.{table}" for table in FORBIDDEN_TABLES), *FORBIDDEN_VIEWS]
+        rows = await conn.fetch(
+            "SELECT name FROM unnest($1::text[]) name "
+            "WHERE has_table_privilege(current_user, to_regclass(name), 'SELECT')",
+            objects,
+        )
+        failures.extend(f"assistant_runtime can SELECT {row['name']}" for row in rows)
+        gate = await conn.fetchval(
+            "SELECT to_regprocedure('assistant_api.potential_access_revision()') IS NOT NULL "
+            "AND (SELECT count(*) = 2 FROM pg_class WHERE oid = ANY(ARRAY["
+            "to_regclass('assistant_api.v_current_records'), "
+            "to_regclass('assistant_api.v_current_raw_records')]) "
+            "AND 'security_barrier=true' = ANY(reloptions))"
+        )
+        if not gate:
+            failures.append("Potential release gate is not installed; apply migrations through 073")
+        if failures:
+            raise PermissionError("privilege self-test failed: " + "; ".join(failures))
 
         try:
             rows = await conn.fetch(
