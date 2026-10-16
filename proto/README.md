@@ -26,3 +26,8 @@ ID and optional community selection, model, and conversation ID. The response
 contains status, answer, conversation ID, file ID, error details, and the existing
 HTTP-style result serialized in `result_json`. `Health` reports process liveness.
 Neither RPC currently requires credentials or authenticates caller identity.
+
+Queries require a positive `user_id` from the trusted Go adapter. `History` accepts
+`user_id`, `selected_file_id`, an optional `conversation_id`, and a limit (0 uses
+the default 10; maximum 100). It returns the existing user/file conversation and
+recent question/answer pairs from NIA-owned tables in `result_json`.

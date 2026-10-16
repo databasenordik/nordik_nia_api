@@ -98,6 +98,7 @@ def _serialize_turn(result: TurnResult) -> dict[str, Any]:
         "parallel_step_peak": result.parallel_step_peak,
         "critical_path_ms": result.critical_path_ms,
         "conversation_id": result.conversation_id,
+        "exchange_id": result.exchange_id,
         "selected_file_id": result.selected_file_id,
         "suggested_file_id": result.suggested_file_id,
         "error_code": result.error_code,

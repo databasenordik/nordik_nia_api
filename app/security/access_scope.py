@@ -18,6 +18,9 @@ class AccessScope(BaseModel):
     can_use_private_files: bool = False
     history_allowed: bool = False
     display_name: str | None = None
+    # Application user identity supplied by the trusted Go adapter. The data
+    # principal remains separate so existing dataset grants keep working.
+    user_id: int | None = Field(default=None, gt=0)
 
     @field_validator("allowed_file_ids", mode="before")
     @classmethod
@@ -44,6 +47,7 @@ class AccessScope(BaseModel):
             can_use_private_files=self.can_use_private_files,
             history_allowed=self.history_allowed,
             display_name=self.display_name,
+            user_id=self.user_id,
         )
 
     def fingerprint(self) -> str:

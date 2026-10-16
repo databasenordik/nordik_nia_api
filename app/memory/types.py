@@ -73,6 +73,8 @@ class ConversationRecord(BaseModel):
 
     id: str
     principal_id: str
+    user_id: int | None = None
+    community_filter: tuple[str, ...] = ()
     # A conversation is permanently bound to one authorized dataset.  Null is
     # retained only for conversations created before dataset scoping existed.
     selected_file_id: int | None = None

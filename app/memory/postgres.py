@@ -17,6 +17,62 @@ class PostgresMemoryStore:
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
 
+    async def for_user_file(self, scope: AccessScope, file_id: int, conversation_id: str | None = None) -> ConversationRecord:
+        if scope.user_id is None or file_id not in scope.allowed_file_ids:
+            raise PermissionError("user and authorized file are required")
+        if not conversation_id:
+            async with self._pool.acquire() as conn:
+                conversation_id = await conn.fetchval(
+                    """
+                    INSERT INTO assistant.conversations (principal_id, user_id, selected_file_id)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (user_id, file_id) WHERE user_id IS NOT NULL
+                    DO UPDATE SET user_id = EXCLUDED.user_id
+                    WHERE assistant.conversations.principal_id = EXCLUDED.principal_id
+                    RETURNING id::text
+                    """, scope.principal_id, scope.user_id, file_id,
+                )
+            if conversation_id is None:
+                raise PermissionError("conversation not found")
+        record = await self.get(scope, conversation_id)
+        if record is None or record.selected_file_id != file_id:
+            raise PermissionError("conversation not found")
+        return record
+
+    async def history_for_file(self, scope: AccessScope, file_id: int, conversation_id: str | None, limit: int) -> dict:
+        # Read persisted messages, not the 12-message model context snapshot.
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT id::text AS id FROM assistant.conversations
+                   WHERE principal_id = $1 AND user_id = $2 AND file_id = $3
+                     AND ($4::uuid IS NULL OR id = $4::uuid)""",
+                scope.principal_id, scope.user_id, file_id,
+                _validated_id(conversation_id) if conversation_id else None,
+            )
+            if row is None:
+                if conversation_id:
+                    raise PermissionError("conversation not found")
+                return {"conversation_id": None, "file_id": file_id, "entries": [], "has_more": False}
+            rows = await conn.fetch(
+                """
+                SELECT q.exchange_id::text AS id, q.exchange_id::text AS exchange_id,
+                       q.id::text AS question_id, a.id::text AS answer_id,
+                       q.text AS question, a.text AS answer, q.created_at,
+                       a.created_at AS answered_at, q.communities
+                FROM assistant.messages q
+                JOIN assistant.messages a ON a.conversation_id = q.conversation_id
+                    AND a.exchange_id = q.exchange_id AND a.role = 'assistant'
+                WHERE q.conversation_id = $1::uuid AND q.role = 'user'
+                  AND ($2::integer <> 94 OR a.row_access_revision = assistant_api.potential_access_revision())
+                ORDER BY CASE WHEN a.turn_id ~ '^turn-[0-9]+$'
+                              THEN substring(a.turn_id from '[0-9]+')::bigint ELSE 0 END DESC,
+                         a.created_at DESC, a.id DESC
+                LIMIT $3
+                """, row["id"], file_id, limit + 1,
+            )
+        return {"conversation_id": row["id"], "file_id": file_id,
+                "entries": [dict(r) for r in reversed(rows[:limit])], "has_more": len(rows) > limit}
+
     async def get_or_create(self, scope: AccessScope, conversation_id: str | None) -> ConversationRecord:
         if conversation_id:
             conversation_id = _validated_id(conversation_id)
@@ -26,6 +82,7 @@ class PostgresMemoryStore:
         record = ConversationRecord(
             id=conversation_id or _new_id(),
             principal_id=scope.principal_id,
+            user_id=scope.user_id,
         )
         await self.save(record)
         return record
@@ -40,8 +97,8 @@ class PostgresMemoryStore:
                 owner = await conn.fetchrow(
                     """
                     INSERT INTO assistant.conversations
-                        (id, principal_id, selected_file_id, title, current_mode, updated_at)
-                    VALUES ($1::uuid, $2, $3, $4, $5, now())
+                        (id, principal_id, selected_file_id, title, current_mode, user_id, updated_at)
+                    VALUES ($1::uuid, $2, $3, $4, $5, $6, now())
                     ON CONFLICT (id) DO UPDATE SET
                         selected_file_id = COALESCE(
                             assistant.conversations.selected_file_id,
@@ -51,6 +108,7 @@ class PostgresMemoryStore:
                         current_mode = EXCLUDED.current_mode,
                         updated_at = now()
                     WHERE assistant.conversations.principal_id = EXCLUDED.principal_id
+                      AND assistant.conversations.user_id IS NOT DISTINCT FROM EXCLUDED.user_id
                       AND (
                             assistant.conversations.selected_file_id IS NULL
                             OR EXCLUDED.selected_file_id IS NULL
@@ -63,6 +121,7 @@ class PostgresMemoryStore:
                     record.selected_file_id,
                     record.title,
                     _current_mode(record),
+                    record.user_id,
                 )
                 # ON CONFLICT ... WHERE returns no row when the UUID is already
                 # owned by another principal.  Check this before replacing any
@@ -73,13 +132,18 @@ class PostgresMemoryStore:
                     await conn.execute(
                         """
                         INSERT INTO assistant.messages
-                            (id, conversation_id, turn_id, role, text, mode, interrupted, created_at)
-                        VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::timestamptz)
+                            (id, conversation_id, turn_id, role, text, mode, interrupted, created_at,
+                             exchange_id, communities, row_access_revision)
+                        VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::timestamptz,
+                                $9::uuid, $10::text[], $11)
                         ON CONFLICT (id) DO UPDATE SET
                             role = EXCLUDED.role,
                             text = EXCLUDED.text,
                             mode = EXCLUDED.mode,
-                            interrupted = EXCLUDED.interrupted
+                            interrupted = EXCLUDED.interrupted,
+                            exchange_id = EXCLUDED.exchange_id,
+                            communities = EXCLUDED.communities,
+                            row_access_revision = EXCLUDED.row_access_revision
                         WHERE assistant.messages.conversation_id = EXCLUDED.conversation_id
                         """,
                         _validated_id(str(turn["message_id"])),
@@ -90,6 +154,9 @@ class PostgresMemoryStore:
                         str(turn.get("mode") or "text"),
                         bool(turn.get("interrupted")),
                         _as_datetime(turn["created_at"]),
+                        _validated_id(turn["exchange_id"]),
+                        list(turn.get("communities") or []),
+                        record.row_access_revision,
                     )
                 await conn.execute(
                     """
@@ -113,7 +180,7 @@ class PostgresMemoryStore:
             rows = await conn.fetch(
                 """
                 WITH release AS MATERIALIZED (SELECT assistant_api.potential_access_revision() AS revision)
-                SELECT c.id::text AS id, c.principal_id, c.selected_file_id,
+                SELECT c.id::text AS id, c.principal_id, c.user_id, c.selected_file_id,
                        c.title,
                        CASE WHEN c.selected_file_id = 94 AND s.active_query_state->>'row_access_revision' IS DISTINCT FROM release.revision
                             THEN '' ELSE s.rolling_summary END AS rolling_summary,
@@ -125,9 +192,11 @@ class PostgresMemoryStore:
                 CROSS JOIN release
                 LEFT JOIN assistant.conversation_state s ON s.conversation_id = c.id
                 WHERE c.principal_id = $1
+                  AND c.user_id IS NOT DISTINCT FROM $2::bigint
                 ORDER BY c.updated_at DESC
                 """,
                 scope.principal_id,
+                scope.user_id,
             )
         return [_from_row(dict(row), scope.principal_id) for row in rows]
 
@@ -136,7 +205,7 @@ class PostgresMemoryStore:
             row = await conn.fetchrow(
                 """
                 WITH release AS MATERIALIZED (SELECT assistant_api.potential_access_revision() AS revision)
-                SELECT c.id::text AS id, c.principal_id, c.selected_file_id,
+                SELECT c.id::text AS id, c.principal_id, c.user_id, c.selected_file_id,
                        c.title,
                        CASE WHEN c.selected_file_id = 94 AND s.active_query_state->>'row_access_revision' IS DISTINCT FROM release.revision
                             THEN '' ELSE s.rolling_summary END AS rolling_summary,
@@ -150,7 +219,8 @@ class PostgresMemoryStore:
                 LEFT JOIN LATERAL (
                     SELECT jsonb_agg(to_jsonb(recent) ORDER BY recent.sequence) AS stored_messages
                     FROM (
-                        SELECT m.id::text AS message_id, m.turn_id, m.role, m.text,
+                        SELECT m.id::text AS message_id, m.exchange_id::text AS exchange_id,
+                               m.communities, m.turn_id, m.role, m.text,
                                m.mode, m.interrupted, m.created_at,
                                CASE WHEN m.turn_id ~ '^turn-[0-9]+$'
                                     THEN substring(m.turn_id from '[0-9]+')::integer
@@ -158,7 +228,8 @@ class PostgresMemoryStore:
                         FROM assistant.messages m
                         WHERE m.conversation_id = c.id
                           AND (c.selected_file_id IS DISTINCT FROM 94 OR m.role = 'user'
-                               OR s.active_query_state->>'row_access_revision' = release.revision)
+                               OR m.row_access_revision = release.revision)
+                          AND to_jsonb(m.communities) = COALESCE(s.active_query_state->'community_filter', '[]'::jsonb)
                         ORDER BY sequence DESC, m.created_at DESC, m.id DESC
                         LIMIT 12
                     ) recent
@@ -169,7 +240,7 @@ class PostgresMemoryStore:
             )
         if row is None:
             return None
-        if row["principal_id"] != scope.principal_id:
+        if row["principal_id"] != scope.principal_id or dict(row).get("user_id") != scope.user_id:
             raise PermissionError("conversation is not in this access scope")
         return _from_row(dict(row), scope.principal_id)
 
@@ -186,11 +257,12 @@ class PostgresMemoryStore:
             deleted = await conn.fetchval(
                 """
                 DELETE FROM assistant.conversations
-                WHERE id = $1::uuid AND principal_id = $2
+                WHERE id = $1::uuid AND principal_id = $2 AND user_id IS NOT DISTINCT FROM $3::bigint
                 RETURNING 1
                 """,
                 _validated_id(conversation_id),
                 scope.principal_id,
+                scope.user_id,
             )
         return deleted is not None
 
@@ -207,12 +279,13 @@ class PostgresMemoryStore:
                 """
                 UPDATE assistant.conversations
                 SET title = $3, updated_at = now()
-                WHERE id = $1::uuid AND principal_id = $2
+                WHERE id = $1::uuid AND principal_id = $2 AND user_id IS NOT DISTINCT FROM $4::bigint
                 RETURNING 1
                 """,
                 _validated_id(conversation_id),
                 scope.principal_id,
                 title,
+                scope.user_id,
             )
         return updated is not None
 
@@ -253,6 +326,8 @@ def _snapshot(record: ConversationRecord) -> dict[str, Any]:
     return {
         "id": record.id,
         "principal_id": record.principal_id,
+        "user_id": record.user_id,
+        "community_filter": list(record.community_filter),
         "selected_file_id": record.selected_file_id,
         "title": record.title,
         "active_frame_key": record.active_frame_key,
@@ -278,6 +353,7 @@ def _from_row(row: dict[str, Any], principal_id: str) -> ConversationRecord:
         # when a turn is taken, so reading the title out of it meant a rename was stored and
         # then never shown -- the row said one thing and every endpoint said another.
         record.selected_file_id = row.get("selected_file_id") or record.selected_file_id
+        record.user_id = row.get("user_id")
         record.title = row.get("title") or record.title
         if record.selected_file_id == 94:
             record.row_access_revision = row.get("current_access_revision")
@@ -286,6 +362,7 @@ def _from_row(row: dict[str, Any], principal_id: str) -> ConversationRecord:
     return ConversationRecord(
         id=str(row["id"]),
         principal_id=principal_id,
+        user_id=row.get("user_id"),
         selected_file_id=row.get("selected_file_id"),
         title=row.get("title"),
         rolling_summary=row.get("rolling_summary") or "",
@@ -306,6 +383,7 @@ def _from_snapshot(payload: dict[str, Any], principal_id: str) -> ConversationRe
         # from a mutable JSON snapshot.
         principal_id=principal_id,
         selected_file_id=payload.get("selected_file_id"),
+        community_filter=tuple(payload.get("community_filter") or ()),
         title=payload.get("title"),
         active_frame_key=payload.get("active_frame_key"),
         frames=frames,
@@ -321,6 +399,7 @@ def _from_snapshot(payload: dict[str, Any], principal_id: str) -> ConversationRe
 
 def _prepare_turns(record: ConversationRecord) -> None:
     next_sequence = record.message_sequence
+    question_exchange_id = None
     for turn in record.recent_turns:
         raw_turn_id = str(turn.get("turn_id") or "")
         if raw_turn_id.startswith("turn-"):
@@ -335,6 +414,12 @@ def _prepare_turns(record: ConversationRecord) -> None:
             next_sequence += 1
         if not turn.get("created_at"):
             turn["created_at"] = datetime.now(UTC).isoformat()
+        if not turn.get("exchange_id"):
+            turn["exchange_id"] = (
+                question_exchange_id if turn.get("role") == "assistant" and question_exchange_id
+                else turn["message_id"]
+            )
+        question_exchange_id = turn["exchange_id"] if turn.get("role") == "user" else None
     record.message_sequence = max(record.message_sequence, next_sequence)
 
 
@@ -358,6 +443,8 @@ def _enrich_turns(record: ConversationRecord, stored: Any) -> None:
     if len(rows) == len(record.recent_turns):
         for turn, row in zip(record.recent_turns, rows, strict=False):
             turn.setdefault("message_id", row.get("message_id"))
+            turn.setdefault("exchange_id", row.get("exchange_id"))
+            turn.setdefault("communities", row.get("communities") or [])
             turn.setdefault("turn_id", row.get("turn_id"))
             turn.setdefault("created_at", str(row.get("created_at")))
     _prepare_turns(record)

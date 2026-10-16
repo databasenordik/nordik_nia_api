@@ -34,12 +34,14 @@ def update_memory_from_turn(
     introduced = extract_introduced_name(question)
     if introduced:
         conversation.user_display_name = introduced
-    _append_turn(conversation, role="user", text=question, mode=mode)
+    exchange_id = str(uuid4())
+    _append_turn(conversation, role="user", text=question, mode=mode, exchange_id=exchange_id)
     _append_turn(
         conversation,
         role="assistant",
         text=answer,
         mode=mode,
+        exchange_id=exchange_id,
         interrupted=interrupted,
         citations=list(citations or []),
     )
@@ -85,6 +87,7 @@ def _append_turn(
     role: str,
     text: str,
     mode: str,
+    exchange_id: str,
     interrupted: bool = False,
     citations: list[str] | None = None,
 ) -> None:
@@ -93,6 +96,8 @@ def _append_turn(
     conversation.recent_turns.append(
         {
             "message_id": str(uuid4()),
+            "exchange_id": exchange_id,
+            "communities": list(conversation.community_filter),
             "turn_id": f"turn-{sequence}",
             "created_at": datetime.now(UTC).isoformat(),
             "role": role,

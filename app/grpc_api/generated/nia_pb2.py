@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\tnia.proto\x12\rnordik.nia.v1\"w\n\x0cQueryRequest\x12\x10\n\x08question\x18\x01 \x01(\t\x12\x18\n\x10selected_file_id\x18\x02 \x01(\x03\x12\x17\n\x0f\x63onversation_id\x18\x03 \x01(\t\x12\r\n\x05model\x18\x04 \x01(\t\x12\x13\n\x0b\x63ommunities\x18\x05 \x03(\t\"\x9b\x01\n\rQueryResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x0e\n\x06\x61nswer\x18\x02 \x01(\t\x12\x17\n\x0f\x63onversation_id\x18\x03 \x01(\t\x12\x18\n\x10selected_file_id\x18\x04 \x01(\x03\x12\x12\n\nerror_code\x18\x05 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x06 \x01(\t\x12\x13\n\x0bresult_json\x18\x07 \x01(\x0c\"\x0f\n\rHealthRequest\" \n\x0eHealthResponse\x12\x0e\n\x06status\x18\x01 \x01(\t2\x96\x01\n\tAssistant\x12\x42\n\x05Query\x12\x1b.nordik.nia.v1.QueryRequest\x1a\x1c.nordik.nia.v1.QueryResponse\x12\x45\n\x06Health\x12\x1c.nordik.nia.v1.HealthRequest\x1a\x1d.nordik.nia.v1.HealthResponseB(Z&nordik-drive-api/internal/nia/pb;niapbb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\tnia.proto\x12\rnordik.nia.v1\"\x88\x01\n\x0cQueryRequest\x12\x10\n\x08question\x18\x01 \x01(\t\x12\x18\n\x10selected_file_id\x18\x02 \x01(\x03\x12\x17\n\x0f\x63onversation_id\x18\x03 \x01(\t\x12\r\n\x05model\x18\x04 \x01(\t\x12\x13\n\x0b\x63ommunities\x18\x05 \x03(\t\x12\x0f\n\x07user_id\x18\x06 \x01(\x03\"\xb0\x01\n\rQueryResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x0e\n\x06\x61nswer\x18\x02 \x01(\t\x12\x17\n\x0f\x63onversation_id\x18\x03 \x01(\t\x12\x18\n\x10selected_file_id\x18\x04 \x01(\x03\x12\x12\n\nerror_code\x18\x05 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x06 \x01(\t\x12\x13\n\x0bresult_json\x18\x07 \x01(\x0c\x12\x13\n\x0b\x65xchange_id\x18\x08 \x01(\t\"\x0f\n\rHealthRequest\" \n\x0eHealthResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\"c\n\x0eHistoryRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\x03\x12\x18\n\x10selected_file_id\x18\x02 \x01(\x03\x12\x17\n\x0f\x63onversation_id\x18\x03 \x01(\t\x12\r\n\x05limit\x18\x04 \x01(\x05\"&\n\x0fHistoryResponse\x12\x13\n\x0bresult_json\x18\x01 \x01(\x0c\x32\xe0\x01\n\tAssistant\x12\x42\n\x05Query\x12\x1b.nordik.nia.v1.QueryRequest\x1a\x1c.nordik.nia.v1.QueryResponse\x12\x45\n\x06Health\x12\x1c.nordik.nia.v1.HealthRequest\x1a\x1d.nordik.nia.v1.HealthResponse\x12H\n\x07History\x12\x1d.nordik.nia.v1.HistoryRequest\x1a\x1e.nordik.nia.v1.HistoryResponseB(Z&nordik-drive-api/internal/nia/pb;niapbb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,14 +32,18 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'nia_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z&nordik-drive-api/internal/nia/pb;niapb'
-  _globals['_QUERYREQUEST']._serialized_start=28
-  _globals['_QUERYREQUEST']._serialized_end=147
-  _globals['_QUERYRESPONSE']._serialized_start=150
-  _globals['_QUERYRESPONSE']._serialized_end=305
-  _globals['_HEALTHREQUEST']._serialized_start=307
-  _globals['_HEALTHREQUEST']._serialized_end=322
-  _globals['_HEALTHRESPONSE']._serialized_start=324
-  _globals['_HEALTHRESPONSE']._serialized_end=356
-  _globals['_ASSISTANT']._serialized_start=359
-  _globals['_ASSISTANT']._serialized_end=509
+  _globals['_QUERYREQUEST']._serialized_start=29
+  _globals['_QUERYREQUEST']._serialized_end=165
+  _globals['_QUERYRESPONSE']._serialized_start=168
+  _globals['_QUERYRESPONSE']._serialized_end=344
+  _globals['_HEALTHREQUEST']._serialized_start=346
+  _globals['_HEALTHREQUEST']._serialized_end=361
+  _globals['_HEALTHRESPONSE']._serialized_start=363
+  _globals['_HEALTHRESPONSE']._serialized_end=395
+  _globals['_HISTORYREQUEST']._serialized_start=397
+  _globals['_HISTORYREQUEST']._serialized_end=496
+  _globals['_HISTORYRESPONSE']._serialized_start=498
+  _globals['_HISTORYRESPONSE']._serialized_end=536
+  _globals['_ASSISTANT']._serialized_start=539
+  _globals['_ASSISTANT']._serialized_end=763
 # @@protoc_insertion_point(module_scope)
