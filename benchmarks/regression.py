@@ -2,8 +2,8 @@
 
 The markdown file is the input, not a fixture baked into this module: questions and
 expected answers are read from its table, so nothing here is tied to a particular
-benchmark. Every question runs in a fresh conversation with no dataset pre-selected,
-so dataset selection is part of what is measured.
+benchmark. Every question runs in a fresh conversation. Scoped suites supply the
+selected list explicitly, including intentional list-mismatch and permission cases.
 
     python -m benchmarks.regression docs/questions.md --live
     python -m benchmarks.regression docs/questions.md --offline --to 20

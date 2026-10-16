@@ -374,7 +374,9 @@ class MemoryDataGateway:
         rows = await self.list_records(scope, file_ids, predicates, limit=100_000)
         values: list[float] = []
         for row in rows:
-            number = derive_number(self._display(row, field), value_part)
+            spec = self._catalog.resolve_field(int(row["file_id"]), field)
+            part = value_part or ("number" if spec and spec.semantic_type == "number" else None)
+            number = derive_number(self._display(row, field), part)
             if number is not None:
                 values.append(number)
         if not values:

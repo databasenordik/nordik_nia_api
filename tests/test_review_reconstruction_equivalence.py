@@ -1381,3 +1381,173 @@ def test_a_real_group_threshold_is_still_carried_into_the_plan():
     )
     check = reconcile_reconstruction(recon, bind_scope(plan, 49))
     assert [item.text for item in check.fills] == ["more than one student"]
+
+
+@pytest.mark.asyncio
+async def test_correction_adding_an_unreconstructed_condition_executes_without_it(ai_settings):
+    """The reviewer's invention is dropped, not the turn.
+
+    Live, "the most rare causes of death" came back as a valid ranking plus a correction
+    that attached a condition excluding "unknown" which the same review never reconstructed.
+    Refusing told the user only that a correction could not be verified; executing it would
+    have answered a narrower question. The ranking the reconstruction does state survives.
+    """
+    requirements = [_req("goal", goal="rank"), _req("grouping", field="community", position=0)]
+    primary = _turn({"goal": "rank", "group_by": ["community"]}, requirements)
+    invented = _turn(
+        {
+            "goal": "rank",
+            "group_by": ["community"],
+            "filters": [{"field": "community", "operator": "EQUALS", "value": "Lake Town"}],
+        },
+        requirements,
+    )
+    provider = FakeReasoningProvider()
+    provider.structured_queue = [
+        primary,
+        {
+            "verdict": "corrected",
+            "missing": ["one community"],
+            "plan": invented.model_dump(),
+            "reconstructed_requirements": requirements,
+        },
+    ]
+    result = await _plan("Which communities appear least often?", provider)
+    assert result.status == "planned"
+    assert not any(predicate.field == "community" for step in result.plan.steps for predicate in step.where)
+
+
+@pytest.mark.asyncio
+async def test_a_correction_whose_own_requirement_states_the_condition_keeps_it(ai_settings):
+    """The same shape with provenance still executes the condition."""
+    stated = _req("filter", collection="filters", field="community",
+                  operator="EQUALS", value="Lake Town")
+    requirements = [_req("goal", goal="rank"), _req("grouping", field="community", position=0)]
+    primary = _turn({"goal": "rank", "group_by": ["community"]}, requirements)
+    corrected = _turn(
+        {
+            "goal": "rank",
+            "group_by": ["community"],
+            "filters": [{"field": "community", "operator": "EQUALS", "value": "Lake Town"}],
+        },
+        [*requirements, stated],
+    )
+    provider = FakeReasoningProvider()
+    provider.structured_queue = [
+        primary,
+        {
+            "verdict": "corrected",
+            "missing": ["one community"],
+            "plan": corrected.model_dump(),
+            "reconstructed_requirements": [*requirements, stated],
+        },
+    ]
+    result = await _plan("Which recorded communities appear least often?", provider)
+    assert result.status == "planned"
+    assert any(predicate.field == "community" for step in result.plan.steps for predicate in step.where)
+
+
+@pytest.mark.asyncio
+async def test_an_unreconstructed_free_text_search_is_dropped_too(ai_settings):
+    """A text search narrows exactly as a filter does, so it goes the same way."""
+    requirements = [_req("goal", goal="count")]
+    primary = _turn({"goal": "count"}, requirements)
+    corrected = _turn({"goal": "count", "search_text": "hospital"}, requirements)
+    provider = FakeReasoningProvider()
+    provider.structured_queue = [
+        primary,
+        {
+            "verdict": "corrected",
+            "missing": ["hospital"],
+            "plan": corrected.model_dump(),
+            "reconstructed_requirements": requirements,
+        },
+    ]
+    result = await _plan("How many students are recorded?", provider)
+    assert result.status == "planned"
+    assert all(not step.query for step in result.plan.steps)
+
+
+@pytest.mark.asyncio
+async def test_an_unreconstructed_statistic_still_fails_closed(ai_settings):
+    """Dropping only ever removes conditions; a measurement nobody reconstructed refuses."""
+    requirements = [_req("goal", goal="list")]
+    primary = _turn({"goal": "list"}, requirements)
+    corrected = _turn(
+        {"goal": "aggregate", "aggregate": {"function": "avg", "field": "age"}}, requirements
+    )
+    unverified = {
+        "verdict": "corrected",
+        "missing": ["average age"],
+        "plan": corrected.model_dump(),
+        "reconstructed_requirements": requirements,
+    }
+    provider = FakeReasoningProvider()
+    provider.structured_queue = [primary, unverified, unverified]
+    result = await _plan("List the students.", provider)
+    assert result.plan is None
+    assert result.status == "clarification"
+
+
+@pytest.mark.asyncio
+async def test_a_review_operator_outside_the_schema_gets_one_repair_not_a_dead_turn(ai_settings):
+    """The auditor was right about the records and wrong about the token.
+
+    "Students explicitly linked to parents Sabine Williams and Emily Watson" was planned with
+    CONTAINS_ANY; the review said both names must match and spelled it CONTAINS_ALL, which the
+    schema does not define. The whole turn failed on the token. One precise retry keeps the
+    independent check and the stricter reading it asked for.
+    """
+    both = [
+        {"field": "parents_names", "operator": "CONTAINS", "value": "Sabine Williams"},
+        {"field": "parents_names", "operator": "CONTAINS", "value": "Emily Watson"},
+    ]
+    requirements = [
+        _req("goal", goal="list"),
+        *[_req("filter", collection="filters", **item) for item in both],
+    ]
+    primary = _turn(
+        {
+            "goal": "list",
+            "filters": [{"field": "parents_names", "operator": "CONTAINS_ANY",
+                         "value": ["Sabine Williams", "Emily Watson"]}],
+        },
+        [_req("goal", goal="list"),
+         _req("filter", collection="filters", field="parents_names", operator="CONTAINS_ANY",
+              value=["Sabine Williams", "Emily Watson"])],
+    )
+    corrected = _turn({"goal": "list", "filters": both, "filter_logic": "and"}, requirements)
+    provider = FakeReasoningProvider()
+    provider.structured_queue = [
+        primary,
+        {
+            "verdict": "corrected",
+            "missing": ["both parents, not either"],
+            "plan": corrected.model_dump(),
+            "reconstructed_requirements": [
+                _req("goal", goal="list"),
+                _req("filter", collection="filters", field="parents_names",
+                     operator="CONTAINS_ALL", value=["Sabine Williams", "Emily Watson"]),
+            ],
+        },
+        {
+            "verdict": "corrected",
+            "missing": ["both parents, not either"],
+            "plan": corrected.model_dump(),
+            "reconstructed_requirements": requirements,
+        },
+    ]
+    result = await _plan(
+        "Which students are explicitly linked to parents Sabine Williams and Emily Watson?",
+        provider,
+    )
+    assert result.status == "planned"
+    # One extra review call, not a failed turn, and the strict reading it asked for.
+    assert result.review_attempts == 2
+    values = {
+        str(predicate.value)
+        for step in result.plan.steps
+        for predicate in step.where
+        if predicate.field == "parents_names"
+    }
+    assert values == {"Sabine Williams", "Emily Watson"}

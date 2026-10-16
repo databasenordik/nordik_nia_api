@@ -106,6 +106,11 @@ def _source_cell(
     for path in sources.get(semantic_field, []):
         if raw_only and not path.startswith("fields."):
             continue
+        if raw_only and path[7:] in (blob.get("fields") or {}):
+            # A present source cell is authoritative even when blank. Falling
+            # through to legacy aliases resurrects values removed by curation.
+            node = blob["fields"][path[7:]]
+            return _as_text(node.get("raw") if isinstance(node, dict) else node)
         node = _at(blob, path)
         text = _as_text(node.get("raw") if raw_only and isinstance(node, dict) else node)
         if text:
@@ -146,7 +151,11 @@ def parts_for_row(row: dict[str, Any], file_id: int, sources: dict[str, list[str
         last=_source_cell(row, "last_name_source", sources, raw_only=True),
         indigenous=_source_cell(row, "indigenous_name", sources, raw_only=True),
     )
-    enriched = merge_name_comments(base, _source_cell(row, "name_comments", sources, raw_only=True))
+    comments = _source_cell(row, "name_comments", sources, raw_only=True)
+    fields = (row.get("row_data_normalized") or {}).get("fields") or {}
+    comments_path = next((path for path in sources.get("name_comments", [])
+                          if path.startswith("fields.") and path[7:] in fields), "")
+    enriched = merge_name_comments(base, comments, bare_variants=comments_path == "fields.VARIATIONS OF NAME")
     # Comments can record additional given-name variants, but cannot rewrite the
     # person's standardized Middle Name cell.
     return replace(

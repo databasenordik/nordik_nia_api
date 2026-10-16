@@ -249,6 +249,19 @@ def _validate_op_contract(step: PlanStep) -> None:
 
 def validate_filter_value(operator: str, value) -> None:
     """Reject malformed operands instead of executing them as zero matches."""
+    if operator in {"IS_KNOWN", "IS_UNKNOWN", "IS_TRUE", "IS_FALSE"}:
+        return
+    if value is None or (isinstance(value, str) and not value.strip()) or value == []:
+        raise PlanValidationError(f"{operator} requires a nonempty operand", code="operator")
+    if operator == "NUMBER_RANGE":
+        if not isinstance(value, list | tuple) or len(value) != 2:
+            raise PlanValidationError("NUMBER_RANGE requires two numeric endpoints", code="operator")
+        try:
+            low, high = (float(endpoint) for endpoint in value)
+        except (TypeError, ValueError):
+            raise PlanValidationError("NUMBER_RANGE requires two numeric endpoints", code="operator") from None
+        if not low <= high or any(isinstance(endpoint, bool) for endpoint in value):
+            raise PlanValidationError("NUMBER_RANGE endpoints must be ordered numbers", code="operator")
     if operator != "DATE_RANGE":
         return
     from app.normalization.date_expression import bounds, date_groups

@@ -4,7 +4,7 @@
     {
       "id": "Q20",
       "source_question_id": 20,
-      "question": "How many deceased students do not have a community listed?",
+      "question": "How many students recorded as deceased have no community listed?",
       "selected_file_id": 49,
       "authorized_file_ids": [49, 91],
       "category": "master-specific",
@@ -22,7 +22,7 @@
     {
       "id": "Q37",
       "source_question_id": 37,
-      "question": "How many students listed as deceased have no death details recorded?",
+      "question": "How many students recorded as deceased have no death details recorded?",
       "selected_file_id": 49,
       "authorized_file_ids": [49, 91],
       "category": "master-specific",
@@ -40,7 +40,7 @@
     {
       "id": "Q44",
       "source_question_id": 44,
-      "question": "Which deceased students have information about both their parents and siblings?",
+      "question": "Which students recorded as deceased have known information in both 'Parents Names' and 'Siblings'? Show each full name and both entries.",
       "selected_file_id": 49,
       "authorized_file_ids": [49, 91],
       "category": "master-specific",
@@ -51,7 +51,8 @@
           {"any_of": [{"field": "deceased_status", "operator": "IS_TRUE"}, {"field": "deceased_status", "operators": ["EQUALS", "IN"], "value": "yes"}]},
           {"field": "parents_names", "operator": "IS_KNOWN"},
           {"field": "siblings", "operator": "IS_KNOWN"}
-        ]
+        ],
+        "project_fields": ["student_name", "parents_names", "siblings"]
       },
       "critical": true,
       "private": false
@@ -59,7 +60,7 @@
     {
       "id": "Q57",
       "source_question_id": 57,
-      "question": "Rank communities by the number of students who died from tuberculosis, from highest to lowest.",
+      "question": "Rank communities by the number of students with tuberculosis recorded as a cause of death, from highest to lowest, and show each count. Include a separate Not recorded category for deaths with no known community.",
       "selected_file_id": 91,
       "authorized_file_ids": [49, 91],
       "category": "confirmed-specific",
@@ -77,7 +78,7 @@
     {
       "id": "Q73",
       "source_question_id": 73,
-      "question": "Which students from Walpole Island are in the Confirmed deaths list, and what were their ages, dates of death, and causes of death?",
+      "question": "Which students are from Walpole Island, and what were their ages at death, dates of death, and causes of death?",
       "selected_file_id": 91,
       "authorized_file_ids": [49, 91],
       "category": "confirmed-specific",
@@ -95,7 +96,7 @@
     {
       "id": "Q75",
       "source_question_id": 75,
-      "question": "Which communities had more than one student die from tuberculosis?",
+      "question": "Which communities have more than one student with tuberculosis recorded as a cause of death, and how many students are recorded for each community?",
       "selected_file_id": 91,
       "authorized_file_ids": [49, 91],
       "category": "confirmed-specific",
@@ -114,7 +115,7 @@
     {
       "id": "THREE",
       "source_question_id": 0,
-      "question": "students from Garden River admitted after 1905 who died from tuberculosis",
+      "question": "List students from Garden River whose first admission was after 1905 and who have tuberculosis recorded as a cause of death.",
       "selected_file_id": 91,
       "authorized_file_ids": [49, 91],
       "category": "confirmed-specific",
@@ -133,7 +134,7 @@
     {
       "id": "A_COUNT",
       "source_question_id": 0,
-      "question": "How many records are in Additional Deaths?",
+      "question": "How many student records are there?",
       "selected_file_id": 93,
       "authorized_file_ids": [49, 91, 93, 94],
       "category": "additional-deaths-specific",
@@ -145,7 +146,7 @@
     {
       "id": "P_COUNT",
       "source_question_id": 0,
-      "question": "How many records are in Potential?",
+      "question": "How many student records are there?",
       "selected_file_id": 94,
       "authorized_file_ids": [49, 91, 93, 94],
       "category": "potential-specific",
@@ -157,11 +158,11 @@
     {
       "id": "P_COMMUNITY",
       "source_question_id": 0,
-      "question": "How many Potential records are from Garden River?",
+      "question": "How many students are recorded as being from Garden River?",
       "selected_file_id": 94,
       "authorized_file_ids": [49, 91, 93, 94],
       "category": "potential-specific",
-      "note": "Potential records a community since migration 064; this is answerable (2 of 56).",
+      "note": "Use the recorded community column and only ACCESS=TRUE rows; compute expected counts from the current authorized snapshot.",
       "expected_outcome": "count",
       "expected_plan": {"required_ops": ["COUNT"], "predicates": [{"field": "community", "operators": ["EQUALS", "IN", "CONTAINS", "CONTAINS_ANY"], "value": "Garden River"}]},
       "critical": true,
@@ -170,7 +171,7 @@
     {
       "id": "AUTHORIZED_SWITCH",
       "source_question_id": 0,
-      "question": "How many records are in Confirmed deaths?",
+      "question": "How many student records are in the Confirmed deaths list?",
       "selected_file_id": 49,
       "authorized_file_ids": [49, 91],
       "category": "authorized switch-list response",

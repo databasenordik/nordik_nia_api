@@ -105,7 +105,12 @@ def predicate_matches(record: dict[str, Any], predicate: Predicate, spec: FieldS
         FilterOperator.LESS_THAN,
         FilterOperator.NUMBER_RANGE,
     }:
-        number = _number(value)
+        if spec.semantic_type == "number":
+            from app.execution.derivations import numeric_value
+
+            number = numeric_value(value, "number")
+        else:
+            number = _number(value)
         if number is None:
             return False
         if operator is FilterOperator.NUMBER_RANGE:

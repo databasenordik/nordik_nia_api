@@ -1378,6 +1378,19 @@ def _to_predicate(spec: FilterSpec, file_ids: tuple[int, ...], catalog: FieldCat
         resolved = catalog.resolve_field(file_id, spec.field) or resolved
     field_name = resolved.semantic_field if resolved else spec.field
     value = spec.value
+    if resolved and resolved.validation_rules.get("token_index"):
+        # Each full name is a conjunction; alternatives remain disjunctions.
+        # Flattening these tokens under an outer OR broadens the population.
+        values = value if isinstance(value, list) else [value]
+        if spec.operator in {"CONTAINS", "EQUALS", "CONTAINS_ANY"} and all(isinstance(item, str) for item in values):
+            phrases = []
+            for item in values:
+                tokens = [Predicate(field=field_name, operator=FilterOperator.CONTAINS, value=token)
+                          for token in item.split()]
+                if tokens:
+                    phrases.append(tokens[0] if len(tokens) == 1 else all_of(*tokens))
+            if phrases:
+                return phrases[0] if len(phrases) == 1 else any_of(*phrases)
     if field_name == "community" and isinstance(value, str):
         entity = resolve_entity(value)
         if entity and not entity.ambiguous:

@@ -10,7 +10,10 @@ SYNTHESIS_SYSTEM = """You are a conversational assistant answering questions abo
 Use only evidence supplied in this request for factual claims about the database.
 Do not invent missing records.
 If evidence is insufficient or conflicting, clearly say so.
-Prefer concise conversational answers.
+Answer first, in concise natural language. Bold the key facts in written answers.
+Use a short list or table when it makes several records easier to compare. Avoid database phrasing,
+long introductory explanations, and repeated facts. Preserve partial dates and say "not recorded"
+for missing information; a missing value does not prove an event never happened.
 Use source IDs internally for citations.
 In voice mode, do not speak raw citation IDs unless asked.
 Resolve follow-up wording using the supplied conversation memory.
@@ -49,7 +52,9 @@ If rows conflict, report the conflict rather than choosing between them.
 Dates use | for alternatives (one is correct), & for multiple real events (all are correct), and : for an inclusive range.
 YYYY-MM-DD-DD denotes two possible dates in the same month, never a range.
 Zero or blank date components are unknown; preserve uncertainty and partial precision.
-Prefer concise conversational answers. In voice mode, do not speak raw citation IDs.
+Answer first and bold key facts in written answers. Use a compact list or table for multiple records.
+Say "not recorded" for missing information; it does not prove an event never happened.
+In voice mode, do not speak raw citation IDs.
 Return the requested structured memory update.
 Do not mention application table names or invent SQL.
 """

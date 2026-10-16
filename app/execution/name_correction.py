@@ -8,9 +8,13 @@ whether they mistyped or the record genuinely is not held.
 How close the guess was decides what to do with it, which is the distinction a person would
 draw themselves:
 
-* exactly one person, one edit away -- a typo. Answer the question about that person and say
-  which name was read, so the correction is visible rather than silent.
-* anything less certain -- two or three edits, or several people equally close -- ask. The
+* exactly one person within reach -- the index was searched with a bounded edit distance per
+  word, so there is nobody else the typed name could have meant. Answer the question about
+  that person and say which name was read, so the correction is visible rather than silent.
+* several people whose records all correct the one word that was searched to the same word --
+  a surname typed for a family. Which person was meant is not the question; the family is
+  unambiguous, so answer for that word and say which one was read.
+* anything less certain -- several people spelt differently from each other -- ask. The
   researcher knows which one they meant and NIA does not.
 
 Nothing here interprets language. It compares the name that was searched for against the
@@ -49,11 +53,58 @@ class NameCorrection:
 
     @property
     def certain(self) -> NameSuggestion | None:
-        """The single person one edit away, if that is unambiguous."""
-        closest = [item for item in self.suggestions if item.distance == 1]
-        if len(closest) == 1 and len(self.suggestions) == 1:
-            return closest[0]
+        """The one person the typed name can only have meant, if there is one.
+
+        The index is searched with a bounded edit distance per word, so a single suggestion
+        means no other person is within that bound: asking which one was meant has one
+        possible answer. Requiring the single edit as well turned "Rita Abottasaway" -- two
+        letters out, one candidate -- into a question whose answer was already known, and the
+        correction is stated either way.
+        """
+        return self.suggestions[0] if len(self.suggestions) == 1 else None
+
+    @property
+    def corrected_word(self) -> str | None:
+        """The one word every suggestion corrects a single searched word to, if they agree.
+
+        A surname is typed to ask about a family, and six Abotossaway records are six
+        answers to "did you mean" and one answer to "which family". Correcting the word
+        that was searched asks the question that was asked; the people behind it are what
+        the query then returns.
+        """
+        searched = self.searched_for.split()
+        if len(searched) != 1 or len(self.suggestions) < 2:
+            return None
+        word = searched[0]
+        corrected = {_closest_token(word, item.display_name) for item in self.suggestions}
+        corrected.discard(None)
+        if len(corrected) != 1:
+            return None
+        only = corrected.pop()
+        return only if only and only.casefold() != word.casefold() else None
+
+
+def _edit_distance(left: str, right: str) -> int:
+    """Levenshtein, matching what the SQL gateway computes."""
+    if left == right:
+        return 0
+    previous = list(range(len(right) + 1))
+    for index, a in enumerate(left, start=1):
+        current = [index]
+        for position, b in enumerate(right, start=1):
+            current.append(
+                min(previous[position] + 1, current[position - 1] + 1, previous[position - 1] + (a != b))
+            )
+        previous = current
+    return previous[-1]
+
+
+def _closest_token(word: str, display_name: str) -> str | None:
+    """The word of a recorded name that the searched word is nearest to."""
+    tokens = name_tokens(display_name)
+    if not tokens:
         return None
+    return min(tokens, key=lambda token: (_edit_distance(word.casefold(), token.casefold()), token))
 
 
 def is_name_field(field_name: str, file_ids: tuple[int, ...], catalog: FieldCatalog) -> bool:

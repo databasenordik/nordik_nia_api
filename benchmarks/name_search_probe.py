@@ -21,9 +21,9 @@ from app.memory.store import InMemoryMemoryStore  # noqa: E402
 from app.security.access_scope import AccessScope  # noqa: E402
 
 PROBES = [
-    "Tell me about Pahpahmaush",
-    "Who is Wm. Fisher?",
-    "Find the student whose surname is Assiginak",
+    "Show the recorded information for Pahpahmaush.",
+    "Show the recorded information for Wm. Fisher.",
+    "Find students whose last name is Assiginak.",
 ]
 
 

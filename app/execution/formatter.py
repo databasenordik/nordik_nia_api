@@ -273,7 +273,7 @@ def _format_action(
                 parts.append(f"{label}: {count}")
         if parts:
             return "Comparison: " + "; ".join(parts) + "."
-    aggregate = _format_numeric_aggregates(action, labels, constraint)
+    aggregate = _format_numeric_aggregates(action, labels, constraint, catalog=catalog, file_ids=file_ids)
     if aggregate is not None:
         return aggregate
     if action.rows or (action.goal == "list" and action.total_count is not None):
@@ -284,10 +284,9 @@ def _format_action(
         value = int(count_fact.value)
         if verbose:
             plural = noun if value == 1 else f"{noun}s"
-            verb = "is" if value == 1 else "are"
             if constraint:
-                return f"There {verb} {value} {plural} in the {labels} {constraint}."
-            return f"There {verb} {value} {plural} in the {labels}."
+                return f"**{value:,} {plural}** in the {labels} {constraint}."
+            return f"**{value:,} {plural}** in the {labels}."
         subject = _compact_subject(action.predicates, noun, plural=value != 1)
         return f"{subject}: {value} {noun}." if value == 1 else f"{subject}: {value} {noun}s."
     if action.evidence and action.evidence.items:
@@ -326,23 +325,38 @@ def _format_page(
     scope = f"in the {labels}{(' ' + constraint) if constraint else ''}"
     if total == 0 or not names:
         return f"There are no matching {plural} {scope}."
-    header = f"There {'is' if total == 1 else 'are'} {total} {plural} {scope}."
+    header = f"**{total:,} {plural}** {scope}."
     fields = list(action.projected_fields) or ["student_name"]
     descriptors = {
         item["name"]: item["label"]
         for item in field_descriptors(fields, file_ids, catalog)
     }
-    lines: list[str] = []
-    for index, row in enumerate(action.rows):
-        name = _row_name(row, catalog)
-        extras = [
-            f"{descriptors[field]}: {display_value(semantic_value(row, field, catalog))}"
-            for field in fields
-            if field != "student_name"
-        ]
-        suffix = f" | {'; '.join(extras)}" if extras else ""
-        lines.append(f"{offset + index + 1}. {name}{suffix}")
-    numbered = "\n".join(lines)
+    extras = [field for field in fields if field != "student_name"]
+    if len(action.rows) > 1 and 1 <= len(extras) <= 4:
+        numbered = _markdown_table(
+            ["Student", *(descriptors[field] for field in extras)],
+            [(_row_name(row, catalog), *(display_value(semantic_value(row, field, catalog)) for field in extras))
+             for row in action.rows],
+        )
+    elif extras:
+        blocks = []
+        for row in action.rows:
+            present, missing = [], []
+            for field in extras:
+                value = semantic_value(row, field, catalog)
+                if value is None or value == "":
+                    missing.append(descriptors[field])
+                else:
+                    present.append(f"- **{descriptors[field]}:** {display_value(value)}")
+            block = f"**{_row_name(row, catalog)}**"
+            if present:
+                block += "\n\n" + "\n".join(present)
+            if missing:
+                block += "\n\nNot recorded: " + ", ".join(missing) + "."
+            blocks.append(block)
+        numbered = "\n\n".join(blocks)
+    else:
+        numbered = "\n".join(f"{offset + index + 1}. **{name}**" for index, name in enumerate(names))
     if action.sampled:
         return (
             f"Random sample of {len(names)} from {total} matching {plural} {scope}:\n"
@@ -357,7 +371,7 @@ def _format_page(
         within_end = action.window_cursor + len(names)
         position = "last" if action.window_anchor == "end" else "first"
         page += f" (items {within_start}-{within_end} of the requested {position} {selected})"
-    page += f":\n{numbered}"
+    page += f":\n\n{numbered}"
     more = '\n\nSay "next" to continue.' if action.has_more else ""
     if verbose or action.has_more or total > page_size or action.window_anchor:
         return f"{header}\n{page}{more}"
@@ -390,6 +404,9 @@ def _format_numeric_aggregates(
     action: ActionResult,
     scope_text: str,
     constraint: str,
+    *,
+    catalog: FieldCatalog | None = None,
+    file_ids: tuple[int, ...] = (),
 ) -> str | None:
     """Render MIN / MAX / SUM / AVG results.
 
@@ -398,13 +415,20 @@ def _format_numeric_aggregates(
     """
     parts: list[str] = []
     for fact in action.facts:
-        if fact.name not in _AGGREGATE_WORDS or fact.value is None:
+        if fact.name not in _AGGREGATE_WORDS:
             continue
-        parts.append(f"{_AGGREGATE_WORDS[fact.name]} {_format_number(fact.value)}")
+        field = _field_label(action.stats_field, file_ids, catalog) if action.stats_field else "value"
+        parts.append(f"{_AGGREGATE_WORDS[fact.name].capitalize()} {field}: **{_format_number(fact.value)}**")
     if not parts:
         return None
-    subject = f" {constraint}" if constraint else ""
-    return f"In the {scope_text}{subject}: " + "; ".join(parts) + "."
+    text = "; ".join(parts) + "."
+    if constraint:
+        text += f" Based on records {constraint}."
+    if (action.numeric_known_count is not None and action.numeric_record_count is not None
+            and action.numeric_known_count < action.numeric_record_count):
+        text += (f" Based on **{action.numeric_known_count:,} usable values**; "
+                 f"{action.numeric_record_count - action.numeric_known_count:,} records have no usable value for this calculation.")
+    return text
 
 
 # A distribution this short is shown whole. A longer one leads with its most common values,
@@ -432,6 +456,8 @@ def _format_ranked(
     shown = groups if requested is None else groups[:requested]
     head = shown[0]
     if len(shown) == 1:
+        if requested is None:
+            return f"**{head.label or 'Not recorded'}** — {head.count:,} matching {'record' if head.count == 1 else 'records'}."
         # The groups only add up to the whole when all of them came back. A ranking cut to its
         # top group at the query returns that one group, and summing it said "1882 has the
         # most, with 5 of 5 records" of a list holding 82.
@@ -441,8 +467,8 @@ def _format_ranked(
         )
         share = f" of {everything:,}" if everything is not None else ""
         return (
-            f"{head.label or 'Not recorded'} has the most, with {head.count:,}"
-            f"{share} records in the {scope_text}."
+            f"**{head.label or 'Not recorded'}** has the most, with **{head.count:,}"
+            f"{share} records** in the {scope_text}."
         )
     noun = _record_noun(file_ids)
     suffix = (

@@ -130,5 +130,5 @@ def test_a_count_on_a_short_list_reports_people_beside_rows():
         )
     )
     assert next(fact["value"] for fact in result.facts if fact["name"] == "count") == 7
-    assert result.answer.startswith("There are 7 students in the Student master list.")
+    assert result.answer.startswith("**7 students** in the Student master list.")
     assert "**3 unique named people**" in result.answer

@@ -177,7 +177,8 @@ async def serve(settings: Settings, port: int) -> None:
 
 
 if __name__ == "__main__":
-    from app.config import get_settings
     import os
+
+    from app.config import get_settings
     logging.basicConfig(level=logging.INFO)
     asyncio.run(serve(get_settings(), int(os.environ.get("PORT", "8080"))))

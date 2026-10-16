@@ -327,7 +327,7 @@ def test_count_then_list_them_switches_goal():
     )
     assert second.status == "answered"
     assert "1." in second.answer
-    assert "There are 5 students" in second.answer
+    assert "**5 students**" in second.answer
     assert second.plan is not None
     assert "list" in second.plan.goals
 
@@ -575,7 +575,7 @@ def test_supported_requested_field_is_projected_and_structured():
     )
 
     assert result.status == "answered"
-    assert "Admitted date:" in result.answer
+    assert "| Student | Admitted date |" in result.answer
     assert [field["name"] for field in result.list_results[0]["fields"]] == [
         "student_name",
         "admitted_date",

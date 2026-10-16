@@ -148,7 +148,7 @@ def test_named_record_followup_stays_in_authorized_records_and_projects_fields()
     assert result.reasoning_calls == 0
     assert "Sarah B" in result.answer
     assert "Garden River" in result.answer
-    assert "Deceased status: Yes" in result.answer
+    assert "**Deceased status:** Yes" in result.answer
     assert "Twitter" not in result.answer
 
 

@@ -25,17 +25,20 @@ ON CONFLICT (file_id) DO UPDATE SET
     private_policy_mode = EXCLUDED.private_policy_mode,
     updated_at = now();
 
-INSERT INTO public.communities (name, variants)
-SELECT 'Garden River', ARRAY['Garden River First Nation', 'Garden Rvr']
-WHERE NOT EXISTS (SELECT 1 FROM public.communities WHERE name = 'Garden River');
+-- Production's community table records one name and no aliases, which is what
+-- v_reference_entities offers, so the stub row carries the name alone.
+INSERT INTO public.communities (community_name)
+SELECT 'Garden River'
+WHERE NOT EXISTS (SELECT 1 FROM public.communities WHERE community_name = 'Garden River');
 
-INSERT INTO public.day_schools (name, variants)
-SELECT 'Shingwauk', ARRAY['Shingwauk Home', 'Shingwauk Residential School']
-WHERE NOT EXISTS (SELECT 1 FROM public.day_schools WHERE name = 'Shingwauk');
+-- Aliases live in one delimited string, which the view splits on ';' or ','.
+INSERT INTO public.day_schools (school_name, name_variants)
+SELECT 'Shingwauk', 'Shingwauk Home; Shingwauk Residential School'
+WHERE NOT EXISTS (SELECT 1 FROM public.day_schools WHERE school_name = 'Shingwauk');
 
-INSERT INTO public.indian_hospitals (name, variants)
-SELECT 'Fort William', ARRAY['Fort William Indian Hospital']
-WHERE NOT EXISTS (SELECT 1 FROM public.indian_hospitals WHERE name = 'Fort William');
+INSERT INTO public.indian_hospitals (hospital_name, name_variants)
+SELECT 'Fort William', 'Fort William Indian Hospital'
+WHERE NOT EXISTS (SELECT 1 FROM public.indian_hospitals WHERE hospital_name = 'Fort William');
 
 INSERT INTO public.provinces (name, code, variants)
 SELECT 'Ontario', 'ON', ARRAY['Ont.', 'Ontario']

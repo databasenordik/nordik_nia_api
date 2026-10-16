@@ -1082,11 +1082,14 @@ class AssistantTurnService:
             return None
 
         certain = correction.certain
-        if certain is not None:
+        # One person within reach, or one word every candidate agrees the search should have
+        # been: either way the correction has a single reading, so answer it and say so.
+        corrected = certain.display_name if certain is not None else correction.corrected_word
+        if corrected:
             rerun = await self._run_plan(
                 scope,
                 question,
-                rewrite_for(plan, catalog, certain.display_name, searched_for=searched_for),
+                rewrite_for(plan, catalog, corrected, searched_for=searched_for),
                 conversation,
                 mode=mode,
                 cancel=cancel,
@@ -1096,7 +1099,7 @@ class AssistantTurnService:
                 on_progress=on_progress,
             )
             if rerun.status == "answered" and _found_any(rerun):
-                prefix = corrected_prefix(searched_for, certain.display_name)
+                prefix = corrected_prefix(searched_for, corrected)
                 rerun.answer = f"{prefix} {rerun.answer}".strip()
                 rerun.detail = "name_correction_applied"
                 return rerun

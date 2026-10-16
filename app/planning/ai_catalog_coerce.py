@@ -11,6 +11,7 @@ from app.planning.ai_turn_schema import (
     FilterRequirement,
     GoalRequirement,
     GroupingRequirement,
+    IntervalRequirement,
     PlannedQueryAction,
     PlannedTurn,
     ProjectionRequirement,
@@ -49,11 +50,13 @@ def coerce_stated_requirements(
     comparison on the same canonical surface.
     """
     coerced: list[StatedRequirement] = []
+    disjunctions = _disjunctive_actions(requirements)
     for item in requirements:
-        coerced.extend(_coerce_requirements(item, catalog, file_id, question))
+        coerced.extend(_coerce_requirements(item, catalog, file_id, question, disjunctions))
     coerced = _flatten_compare_requirements(coerced)
     coerced = _rank_requirements(coerced, catalog, file_id)
     coerced = _row_count_requirements(coerced, catalog, file_id)
+    coerced = _without_restated_calendar_intervals(coerced, catalog, file_id)
     return _distinct_count_requirements(coerced) if _asks_distinct_count(question) else coerced
 
 
@@ -92,6 +95,7 @@ def coerce_planned_turn(
         else:
             actions.append(action)
     requirements: list[Any] = []
+    disjunctions = _disjunctive_actions(planned.stated_requirements)
     for item in planned.stated_requirements:
         if item.action_index in flattened and getattr(item, "collection", None) == "compare":
             item = item.model_copy(
@@ -99,10 +103,11 @@ def coerce_planned_turn(
             )
         elif item.action_index in flattened and isinstance(item, SearchTextRequirement):
             item = item.model_copy(update={"branch_index": None, "branch_label": None})
-        requirements.extend(_coerce_requirements(item, catalog, file_id, question))
+        requirements.extend(_coerce_requirements(item, catalog, file_id, question, disjunctions))
     requirements = _flatten_compare_requirements(requirements)
     requirements = _rank_requirements(requirements, catalog, file_id)
     requirements = _row_count_requirements(requirements, catalog, file_id)
+    requirements = _without_restated_calendar_intervals(requirements, catalog, file_id)
     if _asks_distinct_count(question):
         requirements = _distinct_count_requirements(requirements)
     if not changed and requirements == planned.stated_requirements:
@@ -110,9 +115,54 @@ def coerce_planned_turn(
     return planned.model_copy(update={"actions": actions, "stated_requirements": requirements})
 
 
+_CALENDAR_BOUND = re.compile(r"\d{3,4}(?:-\d{1,2}(?:-\d{1,2})?)?")
+_DATE_SPAN_OPERATORS = frozenset({"DATE_RANGE", "YEAR_EQUALS", "BEFORE", "AFTER", "EQUALS"})
+
+
+def _without_restated_calendar_intervals(
+    requirements: list[Any], catalog: FieldCatalog, file_id: int
+) -> list[Any]:
+    """Drop an interval requirement whose bounds are calendar values, not date fields.
+
+    interval_start and interval_end name the two date fields bounding each record's own
+    period, which is how "admitted before their tenth birthday" is expressed. A calendar
+    span is a filter. "Admitted from 1940 through 1945" came back reconstructed as both --
+    the DATE_RANGE filter and an interval from "1940" to "1945" -- so parity reported a
+    requirement the plan had to express, and the only way to express it named a field that
+    cannot exist. The span is already stated once; the second form is dropped only when the
+    same action states it as a date condition, so an interval nobody expressed still fails
+    closed.
+    """
+    spans = {
+        item.action_index
+        for item in requirements
+        if isinstance(item, FilterRequirement)
+        and item.operator in _DATE_SPAN_OPERATORS
+        and (spec := catalog.resolve_field(file_id, item.field)) is not None
+        and spec.semantic_type == "date"
+    }
+    kept = []
+    for item in requirements:
+        if (
+            isinstance(item, IntervalRequirement)
+            and item.action_index in spans
+            and all(
+                bound is None
+                or (
+                    _CALENDAR_BOUND.fullmatch(bound.strip())
+                    and catalog.resolve_field(file_id, bound) is None
+                )
+                for bound in (item.interval_start, item.interval_end)
+            )
+            and (item.interval_start or item.interval_end)
+        ):
+            continue
+        kept.append(item)
+    return kept
+
+
 def _asks_distinct_count(question: str) -> bool:
-    return bool(re.match(r"^\s*how\s+many\b",question,re.I)
-                and re.search(r"\b(?:distinct|unique|different)\b",question,re.I)
+    return bool(re.match(r"^\s*how\s+many\s+(?:distinct|unique|different)\b",question,re.I)
                 and not re.search(r"\b(?:per|each|by|distribution|breakdown)\b",question,re.I))
 
 
@@ -252,7 +302,7 @@ def _coerce_query(
         updates["requested_fields"] = projection
     filters: list[FilterSpec] = []
     for item in action.filters:
-        filters.extend(_coerce_filters(item, catalog, file_id))
+        filters.extend(_coerce_filters(item, catalog, file_id, split_tokens=action.filter_logic == "and"))
     if filters != list(action.filters):
         updates["filters"] = filters
 
@@ -380,7 +430,9 @@ def _event_year_filter(spec: FilterSpec) -> dict[str, Any] | None:
     return None
 
 
-def _coerce_filters(spec: FilterSpec, catalog: FieldCatalog, file_id: int) -> list[FilterSpec]:
+def _coerce_filters(
+    spec: FilterSpec, catalog: FieldCatalog, file_id: int, *, split_tokens: bool = True,
+) -> list[FilterSpec]:
     """One planned filter, as the one or more filters it should compile to.
 
     Only a token index splits, and sibling filters are ANDed, which is the semantics a
@@ -388,7 +440,7 @@ def _coerce_filters(spec: FilterSpec, catalog: FieldCatalog, file_id: int) -> li
     """
     field_name = _remap_missing_field(spec.field, None, catalog, file_id) or spec.field
     field = catalog.resolve_field(file_id, field_name)
-    tokens = _token_index_tokens(field, spec)
+    tokens = _token_index_tokens(field, spec) if split_tokens else None
     if tokens is not None:
         return [
             FilterSpec(field=field_name, operator="CONTAINS", value=token) for token in tokens
@@ -407,7 +459,7 @@ def _token_index_tokens(field: FieldSpec | None, spec: FilterSpec) -> list[str] 
     The words of a name are all required, so this asks for every token. CONTAINS_ANY would
     be an OR and would return every Albert on the list.
     """
-    if field is None or spec.operator not in {"CONTAINS", "EQUALS", "CONTAINS_ANY"}:
+    if field is None or spec.operator not in {"CONTAINS", "EQUALS"} or not isinstance(spec.value, str):
         return None
     if not (field.validation_rules or {}).get("token_index"):
         return None
@@ -443,13 +495,22 @@ def _exact_category_match(field: FieldSpec | None, spec: FilterSpec) -> dict[str
     return {"operator": "IN", "value": matched}
 
 
-def _coerce_requirements(item: Any, catalog: FieldCatalog, file_id: int, question: str = "") -> list[Any]:
+def _disjunctive_actions(requirements: list[Any]) -> set[int]:
+    return {item.action_index for item in requirements
+            if isinstance(item, FilterLogicRequirement) and item.filter_logic == "or"}
+
+
+def _coerce_requirements(
+    item: Any, catalog: FieldCatalog, file_id: int, question: str = "",
+    disjunctions: set[int] | None = None,
+) -> list[Any]:
     """Catalog-coerce one requirement, preserving one-to-one parity after splits."""
     if isinstance(item, ProjectionRequirement):
         return [item.model_copy(update={"requested_fields": _coerce_projection(item.requested_fields, catalog, file_id)})]
     if isinstance(item, FilterRequirement):
         spec = FilterSpec(field=item.field, operator=item.operator, value=item.value)
-        rewritten = _coerce_filters(spec, catalog, file_id)
+        split_tokens = not (item.collection == "filters" and item.action_index in (disjunctions or set()))
+        rewritten = _coerce_filters(spec, catalog, file_id, split_tokens=split_tokens)
         if len(rewritten) == 1 and rewritten[0] == spec:
             return [item]
         return [

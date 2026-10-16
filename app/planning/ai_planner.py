@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from app.config import get_settings
 from app.llm.base import ReasoningProvider, StructuredOutputResult, TransientReasoningError
 from app.planning.ai_catalog_coerce import (
+    _asks_distinct_count,
     coerce_planned_turn,
     coerce_stated_requirements,
     source_projection,
@@ -72,6 +73,7 @@ from app.planning.router import PlanRouteResult
 from app.planning.timing import TimingRecorder
 from app.planning.trusted_overrides import trusted_fast_turn
 from app.planning.turn_schema import (
+    FilterSpec,
     ModifyPreviousAction,
     QueryAction,
     TurnPlan,
@@ -175,9 +177,33 @@ Resolve an explicitly named record attribute only to the field whose semantic_fi
 actually match the user's words. Topic similarity is not a match. Before any filter, grouping, sort, or
 projection, verify the chosen field records the fact requested.
 
-If a requested attribute matches no available field, clarify that this list does not record it. Never
-substitute a related-sounding field, invent a semantic field, or treat words found inside unrelated free
-text as evidence that the field represents that concept.
+If a requested attribute matches no available field, never substitute a related-sounding field, invent a
+semantic field, or treat words found inside unrelated free text as evidence that the field represents that
+concept. Clarify that this list does not record it only after the rules below leave the request
+unanswerable: a missing dedicated column is not a missing record, and neither a narrative field carrying
+the event nor a misspelled name is a reason to ask the user for anything.
+
+Distinguish a missing dedicated column from an event described in an available narrative field.
+For documented life events, use an appropriate narrative field and the shortest distinctive stem of the
+event word -- drown, not drowning, so a record reading "drowned" is found too -- then return its
+evidence. Do not search for the user's whole sentence as a literal phrase, and never widen a narrative
+search until it stops excluding anyone: a condition that matches every record states nothing. A mention
+is not proof of the event: retain direction, uncertainty, and who it happened to.
+An age at some event -- admitted before their tenth birthday, died before turning 15 -- is an interval
+between the birth-date field and that event's date field, bounded by interval_max_days or
+interval_min_days at 365.25 days a year; it is never a filter on an age field. How long someone stayed
+or remained is an interval too, and it needs both boundary date fields on THIS list.
+For an unavailable calculation, retrieve the requested person's relevant recorded boundaries when
+possible; never substitute admission age for death age, measure an age where a duration was asked for,
+or guess a minimum value before execution. Asked for the people holding the smallest or largest
+recorded value, sort or take the extreme with a companion field; never filter on the value you expect
+the extreme to be, which states a condition the records have not been read for yet.
+An institution named as context for the selected collection is never a person-name filter.
+For a person lookup, preserve every supplied given name AND surname even when another condition follows.
+A request for members of a named family/surname uses the surname field, without assuming kinship.
+A named person's attribute is a list projection, not a frequency ranking of that attribute.
+For a name described as a nickname/spirit name/alternate spelling, look up the recorded name forms
+and project the name comments as well. The user's description does not establish the name's type.
 
 If the user gives only a value without naming its field (for example "records from <somewhere>" or
 "anyone called <name>"), bind it only to a field that plainly holds that kind of value based on label,
@@ -225,6 +251,9 @@ Choose by requested meaning, not isolated trigger words:
   aggregate name in group_by.
 - maximum/minimum stored FIELD VALUE (highest age, earliest date, oldest/youngest, etc.) -> goal=aggregate
   with exactly one max/min aggregate on that field. Do not confuse this with ranking categories by count.
+- When the user requests the PEOPLE with earliest/latest values, use goal=list sorted by that field,
+  with the requested number and relevant projections. Both youngest AND oldest are two requested results;
+  represent both. Do not discard one, guess its numeric value, or combine incompatible extremes with AND.
 - average/median/mode of a field -> goal=aggregate with exactly one aggregate on that field.
 - records sharing a value AND present at the same time/period/overlap -> goal=duplicates, shared field in
   group_by, interval_start and interval_end set to the date fields bounding each record's period, and
@@ -266,8 +295,10 @@ FOLLOW-UPS: ACTIVE QUERY is authoritative; MEMORY may only help resolve referenc
 8. OTHER SEMANTICS AND AMBIGUITY
 Resolve spoken self-corrections and ignore fillers/polite wrappers. Do not filter on the field being
 enumerated in a grouped breakdown. For a life-event interval, assign the semantically earlier boundary to
-interval_start and the later boundary to interval_end; this does not itself request row sorting. Base-name
-grouping uses group_value_part=base_name.
+interval_start and the later boundary to interval_end; this does not itself request row sorting. Both name
+date FIELDS whose values each record carries, never a year or a date; a calendar span such as "from 1940
+through 1945" is a DATE_RANGE filter, not an interval. Base-name grouping uses
+group_value_part=base_name.
 
 Use deterministic for counts, lists, ranks, and statistics. Use llm_synthesis only when the user explicitly
 asks for a narrative, summary, explanation, or dossier.
@@ -278,6 +309,11 @@ interval bounds, unsupported Boolean logic, or confidence below MIN_CONFIDENCE.
 Confidence measures understanding of the request, not whether a matching record exists or whether
 a supplied name is spelled correctly. Plan explicit name literals as supplied; retrieval checks
 matches and handles spelling suggestions. An unfamiliar name alone is not an ambiguous request.
+Do not ask whether the user wants a count or list when ordinary wording already answers that:
+"are there any" asks existence/count; "which" and "who" ask identities; "what is X's community"
+asks X's recorded community. Unknown data should be reported as unknown, not treated as unclear wording.
+verify_previous is only for an explicit challenge to a previous answer with an ACTIVE QUERY;
+it never means checking your own current work.
 
 9. OUTPUT CONTRACT
 stated_requirements must enumerate every understood executable requirement at the same granularity as the
@@ -322,9 +358,21 @@ VERIFY
 - Fields: every field must exist here and represent the fact asked about. Never substitute related fields.
   recorded=<filled>/<total> is coverage, not semantic evidence. For value-only wording, bind only to a field
   that plainly holds that value kind; material ambiguity requires clarification.
+  A documented event may be in an appropriate narrative column rather than a dedicated column; use the
+  shortest distinctive stem of the event word, so "drown" covers a record reading "drowned", and return
+  evidence, preserving direction and uncertainty. A narrative condition that excludes no record states
+  nothing and is never the repair. Never replace an age-at-death
+  request with admission age, or an asked-for duration with an age: an age at an event, and how long someone
+  stayed, are intervals between two date fields on this list, bounded in days. Never accept a filter on the
+  value a superlative is expected to take; the records have not been read yet. An institution is never a
+  person-name filter. A name-type premise (nickname, spirit name, etc.) requires recorded evidence: search
+  name forms and project comments.
 - Filters: operators must be allowed. Verify every AND/OR relation, negation, value/bound/threshold, and
   presence-vs-value distinction. A value_families category, even "unknown", is a recorded value rather than
   IS_UNKNOWN. Never drop a stated condition.
+  Check that EVERY supplied name component survives alongside other filters. A family-name lookup uses
+  the surname field but does not establish sibling relationships. Never replace an unknown computed bound
+  with null, a guessed number, or another statistic.
 - Goals: record count -> count; unique-value count -> count_distinct aggregate; values alone -> distinct;
   distribution/counts per category -> rank. Category with the most records -> rank by category count;
   maximum/minimum stored field value -> max/min aggregate. Do not confuse those. Same-value records present
@@ -336,13 +384,18 @@ VERIFY
 - Lists: project identity plus every explicitly named field, including condition fields. Identity is the one
   allowed projection even when not named. "Show all information" uses requested_fields=["*"],
   expanded by trusted code to every source attribute. Reconstruct that projection as ["*"].
+  A named person's attribute uses a list projection, not a category ranking. People with earliest/latest
+  values need a sorted list, not only min/max. Youngest AND oldest require both results. A clear identity
+  request does not need a count-versus-list clarification. verify_previous requires an explicit challenge
+  to an existing ACTIVE QUERY, never internal verification of the new request.
 - Missing groups: complete distribution -> include_missing=true; superlative/top-N over recorded values ->
   include_missing=false unless explicitly overridden.
 - Sort/windows: never invent sort. Explicit order wording requests sorting; bare "by <field>" may be
   projection, so clarify if materially ambiguous. Sort direction and first/last anchor are independent.
   Rank has inherent count order and no sort_by requirement.
 - Intervals: interval_start is the semantically earlier boundary and interval_end the later boundary; this
-  does not itself request row sorting.
+  does not itself request row sorting. Both name date FIELDS whose values each record carries, never a year
+  or a date; a calendar span such as "from 1940 through 1945" is a DATE_RANGE filter, not an interval.
 - Follow-ups: ACTIVE QUERY controls inherited semantics; MEMORY only resolves references. refine narrows;
   replace requires explicit substitution. Preserve inherited OR/DNF populations; never silently widen them.
 - Response mode: counts/lists/ranks/stats are deterministic; llm_synthesis only for an explicitly requested
@@ -362,6 +415,8 @@ extra projections/sorts/top_n/aggregates/include_missing/exhaustive, or other de
 If one is the error, reconstruct it before changing it. Never add IS_KNOWN just to exclude missing values from
 a superlative; use include_missing=false. Every corrected action includes type, every requirement includes
 kind, and action_index values are valid. A candidate already following these rules is complete, not corrected.
+Use only the operators listed for the field. There is no CONTAINS_ALL: a value that must contain every one of
+several terms is one CONTAINS filter per term with filter_logic=and, reconstructed the same way.
 """
 
 
@@ -642,17 +697,15 @@ class AIPlanner:
                     self._review_provider, AI_REVIEW_SYSTEM, user, PlanReviewResponse
                 )
             except ValidationError as exc:
-                # A malformed action reference is repairable without guessing its target.
-                # Ask for a new review; never remap or accept the invalid requirement.
-                if not any(error["msg"] == "Value error, stated requirement action_index is out of range"
-                           for error in exc.errors(include_input=False)):
+                # A malformed action reference or an operator the schema does not define is
+                # repairable without guessing what the review meant. Ask for a new review;
+                # never remap or accept the invalid requirement.
+                instruction = _review_schema_repair(exc)
+                if instruction is None:
                     raise
                 attempts = 2
                 result = await self._call(
-                    self._review_provider, AI_REVIEW_SYSTEM,
-                    user + "\nYour previous review had an out-of-range action_index. Return a new "
-                    "review with zero-based action indexes referring to the actions in its plan. "
-                    "Do not drop requirements or guess an index. All semantic checks still apply.",
+                    self._review_provider, AI_REVIEW_SYSTEM, user + "\n" + instruction,
                     PlanReviewResponse,
                 )
             except TransientReasoningError as exc:
@@ -1114,7 +1167,7 @@ def _validate_explicit_request(question: str, turn: TurnPlan, plan, catalog: Fie
                     if spec and any(str(value).casefold() == "unknown" for value in spec.validation_rules.get("recorded_values", [])):
                         raise PlanValidationError(f"{leaf.field} records a category named unknown. The request asks for that recorded category, not an empty value. Match the category by equality.", code="category_contract")
     if re.match(r"^\s*how\s+many\b", question, re.I):
-        distinct = bool(re.search(r"\b(?:distinct|unique|different)\b", question, re.I))
+        distinct = _asks_distinct_count(question)
         if distinct and any(action.goal == "count" for action in turn.query_actions()):
             raise PlanValidationError("The request asks for a number of distinct values, not a number of records. Use count_distinct on the requested field.", code="goal_contract")
         if (not distinct and re.search(r"\bcontain(?:s|ing)?\b", question, re.I)
@@ -1369,6 +1422,133 @@ def _correction_changes_nothing(corrected: Any, candidate: PlannedTurn) -> bool:
     if not isinstance(corrected, PlannedTurn):
         return False
     return _action_semantics(corrected) == _action_semantics(candidate)
+
+
+def _filter_value_key(value: Any) -> str:
+    if isinstance(value, list):
+        return "|".join(sorted(_filter_value_key(item) for item in value))
+    return str(value).strip().casefold()
+
+
+def _drop_unverified_conditions(
+    corrected: PlannedTurn,
+    unverified: list[StatedRequirement],
+) -> PlannedTurn | None:
+    """Take a correction's narrowing conditions back out when it reconstructed none of them.
+
+    A reviewer asked for the rarest causes of death attached an extra branch excluding
+    "unknown" that its own reconstruction never mentioned. Executing it answers a narrower
+    question than was asked on the reviewer's unexamined word; refusing the turn throws away
+    a reconstruction the plan already satisfies and tells the user only that a correction
+    could not be verified. Removing the condition is the one move that narrows nothing, and
+    the reconciliation that follows still has to pass on what is left.
+    """
+    actions = list(corrected.actions)
+    dropped: list[StatedRequirement] = []
+    for item in unverified:
+        index = item.action_index
+        if index >= len(actions) or not isinstance(actions[index], PlannedQueryAction):
+            return None
+        action = actions[index]
+        if isinstance(item, SearchTextRequirement):
+            updated = _without_search_text(action, item)
+        elif isinstance(item, FilterRequirement):
+            updated = _without_filter(action, item)
+        else:
+            return None
+        if updated is None:
+            return None
+        actions[index] = updated
+        dropped.append(item)
+    if not dropped:
+        return None
+    requirements = [
+        item for item in corrected.stated_requirements if not any(item is gone for gone in dropped)
+    ]
+    return _rebuild_turn(corrected, actions, requirements)
+
+
+def _branch_index(action: PlannedQueryAction, item: StatedRequirement) -> int | None:
+    index = getattr(item, "branch_index", None)
+    if index is not None:
+        return index if index < len(action.compare) else None
+    label = (getattr(item, "branch_label", None) or "").strip().casefold()
+    matches = [
+        position
+        for position, branch in enumerate(action.compare)
+        if (branch.label or "").strip().casefold() == label
+    ]
+    return matches[0] if label and len(matches) == 1 else None
+
+
+def _without_search_text(
+    action: PlannedQueryAction, item: SearchTextRequirement
+) -> PlannedQueryAction | None:
+    wanted = item.search_text.strip().casefold()
+    if item.branch_index is None and not item.branch_label:
+        if (action.search_text or "").strip().casefold() != wanted:
+            return None
+        return action.model_copy(update={"search_text": None})
+    position = _branch_index(action, item)
+    if position is None or (action.compare[position].search_text or "").strip().casefold() != wanted:
+        return None
+    branches = list(action.compare)
+    branches[position] = branches[position].model_copy(update={"search_text": None})
+    return action.model_copy(update={"compare": branches})
+
+
+def _without_filter(
+    action: PlannedQueryAction, item: FilterRequirement
+) -> PlannedQueryAction | None:
+    def remove(specs: list[FilterSpec]) -> list[FilterSpec] | None:
+        for position, spec in enumerate(specs):
+            if (
+                spec.field.strip().casefold() == item.field.strip().casefold()
+                and spec.operator == item.operator
+                and _filter_value_key(spec.value) == _filter_value_key(item.value)
+            ):
+                return specs[:position] + specs[position + 1 :]
+        return None
+
+    if item.collection == "filters":
+        remaining = remove(list(action.filters))
+        return None if remaining is None else action.model_copy(update={"filters": remaining})
+    if item.collection == "denominator_filters":
+        remaining = remove(list(action.denominator_filters))
+        return (
+            None
+            if remaining is None
+            else action.model_copy(update={"denominator_filters": remaining})
+        )
+    if item.collection == "filter_groups":
+        index = item.group_index
+        if index is None or index >= len(action.filter_groups):
+            return None
+        remaining = remove(list(action.filter_groups[index].filters))
+        if not remaining:
+            # An emptied group is not a group; FilterGroupSpec requires at least one filter
+            # and dropping the whole group would widen the disjunction it belongs to.
+            return None
+        groups = list(action.filter_groups)
+        groups[index] = groups[index].model_copy(update={"filters": remaining})
+        return action.model_copy(update={"filter_groups": groups})
+    if item.collection == "compare":
+        position = _branch_index(action, item)
+        if position is None:
+            return None
+        remaining = remove(list(action.compare[position].filters))
+        if remaining is None:
+            return None
+        branches = list(action.compare)
+        if not remaining and not branches[position].search_text:
+            # A branch with no condition selects every record, so the branch goes with its
+            # only condition rather than becoming a comparison against everything. An
+            # action left with too few branches fails validation as it always has.
+            del branches[position]
+        else:
+            branches[position] = branches[position].model_copy(update={"filters": remaining})
+        return action.model_copy(update={"compare": branches})
+    return None
 
 
 def _restore_unverified_shape(
@@ -1977,6 +2157,40 @@ def _merged_usage(result: AIPlanningResult) -> dict[str, Any]:
     return usage
 
 
+def _review_schema_repair(exc: ValidationError) -> str | None:
+    """The one precise instruction that repairs a malformed review, or None to fail closed.
+
+    Only errors whose repair needs no guess about what the review meant are retried. An
+    operator outside the schema is one of them: the auditor that answered "both parents
+    named, not either" reached for CONTAINS_ALL, which the vocabulary does not define, and
+    the whole turn failed on the token rather than on the reading -- which was the right
+    one. Naming the executable form costs one call and keeps the independent check.
+    """
+    messages = {error["msg"] for error in exc.errors(include_input=False)}
+    if "Value error, stated requirement action_index is out of range" in messages:
+        return (
+            "Your previous review had an out-of-range action_index. Return a new review with "
+            "zero-based action indexes referring to the actions in its plan. Do not drop "
+            "requirements or guess an index. All semantic checks still apply."
+        )
+    unsupported = sorted(
+        {
+            match[1]
+            for message in messages
+            if (match := re.fullmatch(r"Value error, unsupported operator (\S+)", message))
+        }
+    )
+    if unsupported:
+        return (
+            f"Your previous review used {', '.join(unsupported)}, which the schema does not "
+            "define. Return a new review expressing the same records with the operators listed "
+            "for the field: a value that must contain every one of several terms is one CONTAINS "
+            "filter per term with filter_logic=and, in the plan and in your reconstruction alike. "
+            "Do not weaken the condition to CONTAINS_ANY or drop it. All semantic checks apply."
+        )
+    return None
+
+
 def _sanitize_error(exc: BaseException) -> str:
     # Many transport exceptions (read timeouts, connection resets) carry no message,
     # so str(exc) is empty and the log line reads "provider failure: " with nothing
@@ -2466,6 +2680,37 @@ async def _validate_and_route(
                     if unverified and not blocking
                     else None
                 )
+                if blocking and all(requirement_class(item) == "narrowing" for item in blocking):
+                    # Every unsupported change only narrows. Take those conditions out and
+                    # let the reconciliation below judge the plan without them, instead of
+                    # refusing a turn whose reconstruction the primary plan may already
+                    # satisfy. A drop that leaves the reconstruction unmet still fails.
+                    without = _drop_unverified_conditions(planned, blocking)
+                    remaining = (
+                        unverified_correction_changes(
+                            reconstructed,
+                            bind_scope(original_for_diff, selected_file_id),
+                            bind_scope(without, selected_file_id),
+                        )
+                        if without is not None
+                        else blocking
+                    )
+                    if without is not None and all(
+                        requirement_class(item) == "shape" for item in remaining
+                    ):
+                        logger.info(
+                            "ai planner review correction: dropped unreconstructed condition(s): %s",
+                            "; ".join(sorted(item.text for item in blocking))[:300],
+                        )
+                        planned = without
+                        bound = bind_scope(planned, selected_file_id)
+                        unverified = remaining
+                        blocking = []
+                        restored = (
+                            _restore_unverified_shape(planned, original_for_diff, unverified)
+                            if unverified
+                            else None
+                        )
                 if blocking or (unverified and restored is None):
                     # The shape of the action matters as much as the condition: whether a
                     # presence filter is redundant depends on what the action groups by,
