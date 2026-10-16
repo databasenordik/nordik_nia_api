@@ -76,6 +76,32 @@ async def test_postgres_get_rejects_a_foreign_conversation():
 
 
 @pytest.mark.asyncio
+async def test_postgres_rejects_other_user_under_the_same_data_principal():
+    connection = _Connection(selected={
+        "id": "00000000-0000-0000-0000-000000000001",
+        "principal_id": "shared-grpc-principal", "user_id": 1,
+        "selected_file_id": 49, "active_query_state": {},
+    })
+    store = PostgresMemoryStore(_Pool(connection))
+    with pytest.raises(PermissionError):
+        await store.for_user_file(
+            AccessScope(principal_id="shared-grpc-principal", user_id=2, allowed_file_ids=(49,)),
+            49, connection.selected["id"],
+        )
+
+
+def test_relational_user_id_overrides_snapshot_ownership():
+    from app.memory.postgres import _from_row
+
+    record = _from_row({
+        "id": "00000000-0000-0000-0000-000000000001", "user_id": 7,
+        "selected_file_id": 49,
+        "active_query_state": {"id": "00000000-0000-0000-0000-000000000001", "user_id": 99},
+    }, "shared-grpc-principal")
+    assert record.user_id == 7
+
+
+@pytest.mark.asyncio
 async def test_postgres_save_checks_owner_before_replacing_messages():
     connection = _Connection(saved_owner=None)
     store = PostgresMemoryStore(_Pool(connection))

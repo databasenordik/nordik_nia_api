@@ -52,49 +52,87 @@ class AssistantServicer(nia_pb2_grpc.AssistantServicer):
     async def Health(self, request, context):
         return nia_pb2.HealthResponse(status="ok")
 
+    def user_scope(self, request):
+        if request.user_id <= 0 or request.selected_file_id <= 0:
+            raise ValueError("user_id and selected_file_id must be positive")
+        return self.scope.model_copy(update={"user_id": request.user_id,
+                                            "allowed_file_ids": (request.selected_file_id,)})
+
+    async def History(self, request, context):
+        try:
+            scope = self.user_scope(request)
+            limit = request.limit or 10
+            if limit < 1 or limit > 100:
+                raise ValueError("limit must be between 1 and 100")
+            gateway, store, _ = self.service_factory(scope, ())
+            catalog = await gateway.load_catalog(scope)
+            if catalog.dataset(request.selected_file_id) is None:
+                raise PermissionError("file not available")
+            history = await store.history_for_file(scope, request.selected_file_id,
+                                                   request.conversation_id or None, limit)
+            return nia_pb2.HistoryResponse(result_json=json.dumps(jsonable_encoder(history)).encode())
+        except (ValidationError, ValueError) as exc:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        except PermissionError:
+            await context.abort(grpc.StatusCode.NOT_FOUND, "conversation not found")
+        except grpc.aio.AbortError:
+            raise
+        except Exception:
+            logger.exception("NIA gRPC history failed")
+            await context.abort(grpc.StatusCode.INTERNAL, "NIA history failed")
+
     async def Query(self, request, context):
         try:
             body = QueryRequest(question=request.question,
                                 selected_file_id=request.selected_file_id,
                                 conversation_id=request.conversation_id or None,
                                 model=request.model or None, mode="text")
-            if request.selected_file_id <= 0:
-                raise ValueError("selected_file_id must be positive")
+            scope = self.user_scope(request)
             communities = tuple(sorted({c.strip() for c in request.communities if c.strip()}))
             if len(communities) > 100 or any(len(c) > 200 for c in communities):
                 raise ValueError("too many communities or an overlong community name")
             # Restrict this turn to Go's selected dataset.  The database functions
             # enforce whether that dataset is enabled and whether this principal may
             # use it; no fixed NIA_GRPC_ALLOWED_FILE_IDS deployment setting is used.
-            scope = self.scope.model_copy(
-                update={"allowed_file_ids": (request.selected_file_id,)}
-            )
             gateway, store, reasoner = self.service_factory(scope, communities)
             if communities:
                 catalog = await gateway.load_catalog(scope)
                 if catalog.resolve_field(request.selected_file_id, "community") is None:
                     raise ValueError("selected dataset does not support community filtering")
                 gateway = CommunityGateway(gateway, catalog, communities)
-            # Legacy callers do not send conversation IDs. New follow-ups must retain
-            # the same dataset and filter; prevent an unfiltered old result being reused.
-            if communities and body.conversation_id:
-                raise ValueError("community-filtered follow-up conversations are not supported yet")
+            catalog = await gateway.load_catalog(scope)
+            if catalog.dataset(request.selected_file_id) is None:
+                raise PermissionError("file not available")
+            conversation = await store.for_user_file(scope, request.selected_file_id, body.conversation_id)
+            if conversation.community_filter != communities:
+                # Keep all persisted exchanges in the same user/file history, but
+                # do not reuse model context produced under a different row filter.
+                conversation.community_filter = communities
+                conversation.recent_turns.clear()
+                conversation.frames.clear()
+                conversation.result_sets.clear()
+                conversation.rolling_summary = ""
+                conversation.active_frame_key = None
+                conversation.last_action_keys.clear()
+                await store.save(conversation)
+            body.conversation_id = conversation.id
             service = AssistantTurnService(gateway, store=store, reasoner=reasoner)
             result = await service.answer(scope, body.question, mode="text",
                                           selected_file_id=body.selected_file_id,
                                           conversation_id=body.conversation_id, model=body.model)
             serialized = jsonable_encoder(_serialize_turn(result))
-            if communities:
-                serialized["conversation_id"] = None
             return nia_pb2.QueryResponse(
                 status=result.status, answer=result.answer,
-                conversation_id="" if communities else result.conversation_id or "",
+                conversation_id=result.conversation_id or "",
+                exchange_id=result.exchange_id or "",
                 selected_file_id=result.selected_file_id or request.selected_file_id,
                 error_code=result.error_code or "", detail=result.detail or "",
                 result_json=json.dumps(serialized).encode(),
             )
         except (ValidationError, ValueError) as exc:
             await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        except PermissionError:
+            await context.abort(grpc.StatusCode.NOT_FOUND, "conversation not found")
         except grpc.aio.AbortError:
             raise
         except asyncio.CancelledError:

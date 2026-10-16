@@ -92,6 +92,7 @@ class TurnResult:
     parallel_step_peak: int = 0
     critical_path_ms: float = 0.0
     conversation_id: str | None = None
+    exchange_id: str | None = None
     selected_file_id: int | None = None
     suggested_file_id: int | None = None
     error_code: str | None = None
@@ -156,6 +157,7 @@ class AssistantTurnService:
         # records what the researcher typed, and the answer says what was checked.
         self._turn_user_text: str | None = None
         self._turn_preface: str | None = None
+        self._turn_exchange_id: str | None = None
 
     async def answer(
         self,
@@ -173,6 +175,7 @@ class AssistantTurnService:
         bag: dict[str, Any] = {}
         self._latency_bag = bag
         self._turn_reasoner = self._reasoner_for(model)
+        self._turn_exchange_id = None
         started = time.perf_counter()
         first_token_at: list[float] = []
 
@@ -195,11 +198,13 @@ class AssistantTurnService:
                     on_spoken_phrase=on_spoken_phrase,
                     on_progress=timed_progress,
                 )
+                result.exchange_id = self._turn_exchange_id
         finally:
             self._latency_bag = None
             self._turn_reasoner = None
             self._turn_user_text = None
             self._turn_preface = None
+            self._turn_exchange_id = None
         bag["e2e_ms"] = (time.perf_counter() - started) * 1000
         bag["ttft_ms"] = (
             (first_token_at[0] - started) * 1000 if first_token_at else None
@@ -1890,6 +1895,7 @@ class AssistantTurnService:
         )
         started = time.perf_counter()
         await self._store.save(conversation)
+        self._turn_exchange_id = conversation.recent_turns[-1]["exchange_id"]
         self._note_latency("persist_ms", (time.perf_counter() - started) * 1000, add=True)
 
     async def _record_query_run(

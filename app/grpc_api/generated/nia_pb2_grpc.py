@@ -44,6 +44,11 @@ class AssistantStub(object):
                 request_serializer=nia__pb2.HealthRequest.SerializeToString,
                 response_deserializer=nia__pb2.HealthResponse.FromString,
                 _registered_method=True)
+        self.History = channel.unary_unary(
+                '/nordik.nia.v1.Assistant/History',
+                request_serializer=nia__pb2.HistoryRequest.SerializeToString,
+                response_deserializer=nia__pb2.HistoryResponse.FromString,
+                _registered_method=True)
 
 
 class AssistantServicer(object):
@@ -61,6 +66,12 @@ class AssistantServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def History(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_AssistantServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -73,6 +84,11 @@ def add_AssistantServicer_to_server(servicer, server):
                     servicer.Health,
                     request_deserializer=nia__pb2.HealthRequest.FromString,
                     response_serializer=nia__pb2.HealthResponse.SerializeToString,
+            ),
+            'History': grpc.unary_unary_rpc_method_handler(
+                    servicer.History,
+                    request_deserializer=nia__pb2.HistoryRequest.FromString,
+                    response_serializer=nia__pb2.HistoryResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -129,6 +145,33 @@ class Assistant(object):
             '/nordik.nia.v1.Assistant/Health',
             nia__pb2.HealthRequest.SerializeToString,
             nia__pb2.HealthResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def History(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/nordik.nia.v1.Assistant/History',
+            nia__pb2.HistoryRequest.SerializeToString,
+            nia__pb2.HistoryResponse.FromString,
             options,
             channel_credentials,
             insecure,

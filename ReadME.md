@@ -123,3 +123,26 @@ Login, query, LiveKit token, and speech routes are rate-limited inside the proce
 A conversation stays on one selected list. The registered lists are file 49 (student master list), 91 (confirmed deaths), and the grant-required lists 93 (additional deaths) and 94 (potential records). The default people list is file 49.
 
 Queries run as `assistant_runtime` through `assistant_api`. `GET /health` is liveness only. `GET /ready` is the dependency check.
+
+
+### New user/file chat-history schema upgrade
+
+New migration: `app/db/migrations/074_user_file_conversations.sql`. It extends
+`assistant.conversations` with `user_id` and a stored `file_id` alias, enforces one
+conversation per user/file, and adds `exchange_id` plus message scope metadata to
+`assistant.messages`. Both messages in a question/answer pair share the exchange ID.
+No new tables are created.
+
+For developers using migrations, apply the normal migration runner during rollout:
+
+```powershell
+python -m app.db.migrate
+```
+
+For a manual incremental upgrade of an already initialized database, execute
+`nordikdriveapi/init.sql` instead. It contains the same new SQL in a transaction
+and records migration 074 when the migration tracking table exists.
+`nordikdriveapi/assistant.sql` is the full schema bundle and labels the new section
+`BEGIN NEW CHANGES TO EXECUTE: USER/FILE CHAT HISTORY (MIGRATION 074)`.
+Choose one upgrade route; the application code update does not run SQL itself.
+Legacy rows without a verified application user mapping remain `user_id = NULL`.

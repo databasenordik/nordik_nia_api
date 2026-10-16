@@ -69,13 +69,34 @@ SELECT
 FROM assistant.field_registry r;
 
 CREATE OR REPLACE VIEW assistant_api.v_reference_entities AS
-SELECT 'community'::text AS entity_type, id, name, variants FROM public.communities
+SELECT
+    'community'::text AS entity_type,
+    c.id,
+    c.community_name::text AS name,
+    ARRAY[c.community_name::text] AS variants
+FROM public.communities c
 UNION ALL
-SELECT 'day_school', id, name, variants FROM public.day_schools
+SELECT
+    'day_school',
+    d.id,
+    d.school_name AS name,
+    ARRAY_REMOVE(
+        ARRAY[d.school_name] || COALESCE(regexp_split_to_array(d.name_variants, '\\s*[;,]\\s*'), ARRAY[]::TEXT[]),
+        NULL
+    ) AS variants
+FROM public.day_schools d
 UNION ALL
-SELECT 'indian_hospital', id, name, variants FROM public.indian_hospitals
+SELECT
+    'indian_hospital',
+    h.id,
+    h.hospital_name AS name,
+    ARRAY_REMOVE(
+        ARRAY[h.hospital_name] || COALESCE(regexp_split_to_array(h.name_variants, '\\s*[;,]\\s*'), ARRAY[]::TEXT[]),
+        NULL
+    ) AS variants
+FROM public.indian_hospitals h
 UNION ALL
-SELECT 'province', id, name, COALESCE(variants, ARRAY[code]) FROM public.provinces;
+SELECT 'province', p.id, p.name, ARRAY[p.name] FROM public.provinces p;
 
 CREATE OR REPLACE FUNCTION assistant_api._authorized_file_ids(
     p_principal_id TEXT,

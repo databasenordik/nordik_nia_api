@@ -1,5 +1,10 @@
 GRANT USAGE ON SCHEMA public TO assistant_gateway_owner;
 
+-- PostgreSQL requires the future SECURITY DEFINER owner to have CREATE on a
+-- function's schema before ownership can be transferred.
+GRANT USAGE, CREATE ON SCHEMA assistant TO assistant_gateway_owner;
+GRANT USAGE, CREATE ON SCHEMA assistant_api TO assistant_gateway_owner;
+
 DO $$
 DECLARE
     tbl TEXT;
@@ -39,9 +44,7 @@ REVOKE ALL ON FUNCTION assistant_api.get_raw_fields_by_ids(TEXT, INTEGER[], BOOL
 REVOKE ALL ON FUNCTION assistant_api.resolve_reference_entity(TEXT, TEXT, TEXT) FROM PUBLIC;
 
 GRANT USAGE ON SCHEMA assistant TO assistant_runtime;
-GRANT USAGE ON SCHEMA assistant TO assistant_gateway_owner;
 GRANT USAGE ON SCHEMA assistant_api TO assistant_runtime;
-GRANT USAGE ON SCHEMA assistant_api TO assistant_gateway_owner;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA assistant TO assistant_runtime;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA assistant TO assistant_runtime;

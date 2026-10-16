@@ -5,6 +5,7 @@ option go_package = "nordik-drive-api/internal/nia/pb;niapb";
 service Assistant {
   rpc Query(QueryRequest) returns (QueryResponse);
   rpc Health(HealthRequest) returns (HealthResponse);
+  rpc History(HistoryRequest) returns (HistoryResponse);
 }
 
 message QueryRequest {
@@ -13,6 +14,7 @@ message QueryRequest {
   string conversation_id = 3;
   string model = 4;
   repeated string communities = 5;
+  int64 user_id = 6;
 }
 
 message QueryResponse {
@@ -23,7 +25,17 @@ message QueryResponse {
   string error_code = 5;
   string detail = 6;
   bytes result_json = 7;
+  string exchange_id = 8;
 }
 
 message HealthRequest {}
 message HealthResponse { string status = 1; }
+
+message HistoryRequest {
+  int64 user_id = 1;
+  int64 selected_file_id = 2;
+  string conversation_id = 3;
+  int32 limit = 4;
+}
+
+message HistoryResponse { bytes result_json = 1; }
