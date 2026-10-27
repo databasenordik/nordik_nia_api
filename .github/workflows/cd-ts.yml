@@ -42,10 +42,10 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
       - name: Require the bootstrapped service
         run: |
-          # The service, its secrets and its database connection are created once by hand (DEPLOY.md).
+          # The service, its secrets and its database connection are created once by hand.
           # Creating it here would start a revision with no configuration.
           if ! gcloud run services describe "$CLOUD_RUN_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(metadata.name)'; then
-            echo "::error::$CLOUD_RUN_SERVICE does not exist. Bootstrap it as described in DEPLOY.md."
+            echo "::error::$CLOUD_RUN_SERVICE does not exist. Create and configure it before releasing."
             exit 1
           fi
       - name: Configure Docker authentication
