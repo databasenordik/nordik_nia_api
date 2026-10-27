@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@opencode/client",
+  "version": "2.0.31",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anomalyco/opencode.git",
+    "directory": "packages/client"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": "./src/promise/index.ts",
+    "./promise": "./src/promise/index.ts",
+    "./promise/api": "./src/promise/api.ts",
+    "./service": "./src/promise/service.ts",
+    "./solid": "./src/solid/index.ts",
+    "./effect": "./src/effect/index.ts",
+    "./effect/api": "./src/effect/api.ts",
+    "./effect/service": "./src/effect/service.ts"
+  },
+  "dependencies": {
+    "@opencode/schema": "workspace:*",
+    "@opencode/protocol": "workspace:*"
+  },
+  "peerDependencies": {
+    "effect": "catalog:",
+    "solid-js": ">=1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "effect": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
+  },
+  "private": true
+}

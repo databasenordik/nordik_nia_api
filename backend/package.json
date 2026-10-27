@@ -1,0 +1,21 @@
+{
+  "name": "@nia/backend",
+  "version": "2.0.31",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/host.ts",
+    "./research/*": "./src/research/*.ts",
+    "./plugin/research": "./src/plugin/research.ts",
+    "./response": "./src/research-response.ts"
+  },
+  "dependencies": {
+    "@opencode/ai": "workspace:*",
+    "@opencode/core": "workspace:*",
+    "@opencode/plugin": "workspace:*",
+    "@opencode/schema": "workspace:*",
+    "@opencode/sdk": "workspace:*",
+    "@opencode/util": "workspace:*",
+    "effect": "catalog:"
+  }
+}

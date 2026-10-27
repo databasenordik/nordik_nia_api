@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+*.dump
+*.sqlite*
+profile.json
+providers.json
+.next/
+out/
+*.log
+prev-env.txt
+.vercel/

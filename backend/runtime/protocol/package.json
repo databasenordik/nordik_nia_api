@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@opencode/protocol",
+  "version": "2.0.31",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anomalyco/opencode.git",
+    "directory": "packages/protocol"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./simulation": "./src/simulation.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@opencode/schema": "workspace:*",
+    "effect": "catalog:"
+  },
+  "private": true
+}

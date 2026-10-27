@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": false,
+    "allowJs": false,
+    "noUncheckedIndexedAccess": false,
+    "noUnusedLocals": true
+  }
+}
