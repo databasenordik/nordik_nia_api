@@ -6,16 +6,13 @@
   "packageManager": "bun@1.4.2",
   "license": "MIT",
   "scripts": {
-    "start": "bun run --preload ./frontend/preload.ts frontend/start.ts",
-    "nia": "bun run start",
-    "chat": "bun run start",
-    "research": "bun run start",
+    "start": "bun run backend/src/http.ts",
+    "test": "bun run --cwd tests test",
     "postinstall": "bun run --cwd backend/runtime/core fix-node-pty"
   },
   "workspaces": {
     "packages": [
       "backend",
-      "frontend",
       "backend/runtime/*"
     ],
     "catalog": {

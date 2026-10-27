@@ -7,7 +7,8 @@
     ".": "./src/host.ts",
     "./research/*": "./src/research/*.ts",
     "./plugin/research": "./src/plugin/research.ts",
-    "./response": "./src/research-response.ts"
+    "./response": "./src/research-response.ts",
+    "./http-session": "./src/http-session.ts"
   },
   "dependencies": {
     "@opencode/ai": "workspace:*",

@@ -1,0 +1,9 @@
+.git
+.github
+.env
+.env.*
+**/node_modules
+**/*.tsbuildinfo
+tests
+backend/database
+gha-creds-*.json

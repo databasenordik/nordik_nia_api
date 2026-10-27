@@ -4,15 +4,14 @@ import { mkdir, mkdtemp, rename } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { ResearchHost } from "./host"
+import { HttpSession } from "./http-session"
 
-const origin = process.env.FRONTEND_ORIGIN ?? "http://localhost:3000"
-const accounts = [
-  { username: "researcher", password: process.env.STANDALONE_DEMO_PASSWORD ?? "devpassword" },
-  { username: "user", password: process.env.PUBLIC_TEST_PASSWORD ?? "userpassword" },
-]
+const config = HttpSession.load(process.env)
 
 type Chat = {
   id: string
+  /** The signed-in account that started the chat; nobody else can list, read or continue it. */
+  owner: string
   title: string
   fileID: number
   label: string
@@ -20,7 +19,6 @@ type Chat = {
   turns: { role: string; text: string; citations?: string[] }[]
 }
 
-const sessions = new Map<string, { principal: string }>()
 const chats = new Map<string, Chat>()
 
 const model = process.env.NIA_MODEL
@@ -38,8 +36,10 @@ const directory = process.env.NIA_STATE
   : await mkdtemp(path.join(os.tmpdir(), "nia-http-"))
 await mkdir(directory, { recursive: true, mode: 0o700 })
 const chatsPath = path.join(directory, "chats.json")
+// Chats saved before they had an owner belong to the primary account, which was the only one using them.
 if (await Bun.file(chatsPath).exists())
-  for (const chat of (await Bun.file(chatsPath).json()) as Chat[]) chats.set(chat.id, chat)
+  for (const chat of (await Bun.file(chatsPath).json()) as Chat[])
+    chats.set(chat.id, { ...chat, owner: chat.owner ?? config.accounts[0]!.username })
 let saving = Promise.resolve()
 // Writes are queued so concurrent requests never interleave, and land via rename so a crash
 // mid-write leaves the previous file intact.
@@ -83,23 +83,25 @@ const host = await ResearchHost.create({
   providers: await Bun.file(providersPath).json(),
 })
 
-const cookieName = "nia_session"
-
 function tokenOf(request: Request) {
   const header = request.headers.get("cookie") ?? ""
-  const match = header.match(new RegExp(`(?:^|;\\s*)${cookieName}=([^;]+)`))
+  const match = header.match(new RegExp(`(?:^|;\\s*)${HttpSession.cookieName}=([^;]+)`))
   return match?.[1] ? decodeURIComponent(match[1]) : ""
 }
 
 function principal(request: Request) {
-  return sessions.get(tokenOf(request))?.principal
+  return HttpSession.verify(config, tokenOf(request))
+}
+
+function ownedChat(id: string | undefined, owner: string) {
+  const chat = id ? chats.get(id) : undefined
+  return chat?.owner === owner ? chat : undefined
 }
 
 function cors(request: Request) {
-  const requestOrigin = request.headers.get("origin") ?? origin
-  const allowed = requestOrigin === origin || requestOrigin.startsWith("http://localhost:") || requestOrigin.startsWith("http://127.0.0.1:")
+  const requestOrigin = request.headers.get("origin") ?? config.origins[0]!
   return {
-    "Access-Control-Allow-Origin": allowed ? requestOrigin : origin,
+    "Access-Control-Allow-Origin": HttpSession.allowedOrigin(config, requestOrigin) ? requestOrigin : config.origins[0]!,
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Allow-Headers": "Content-Type, Accept",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
@@ -150,9 +152,10 @@ async function datasets() {
   }
 }
 
-// Loopback by default; hosted deployments set APP_HOST=0.0.0.0 and get their port from PORT.
+// Loopback by default; hosted deployments set APP_HOST=0.0.0.0. The platform's PORT wins over
+// APP_PORT, as in the Python API, so a leftover APP_PORT cannot move the listener off Cloud Run's port.
 const hostname = process.env.APP_HOST ?? "127.0.0.1"
-const port = Number(process.env.APP_PORT ?? process.env.PORT ?? 8000)
+const port = Number(process.env.PORT ?? process.env.APP_PORT ?? 8000)
 
 Bun.serve({
   hostname,
@@ -165,13 +168,10 @@ Bun.serve({
     if (request.method === "POST" && url.pathname === "/api/auth/login") {
       const body = (await request.json().catch(() => null)) as { username?: string; password?: string } | null
       if (!body) return json(request, { detail: "invalid login request" }, 400)
-      const username = body.username?.trim() ?? ""
-      const account = accounts.find((item) => item.username === username && item.password === body.password)
-      if (!account) return json(request, { detail: "unauthorized" }, 401)
-      const token = randomBytes(24).toString("hex")
-      sessions.set(token, { principal: account.username })
+      const username = HttpSession.login(config, body.username?.trim() ?? "", body.password ?? "")
+      if (!username) return json(request, { detail: "unauthorized" }, 401)
       return json(request, sessionBody(), 200, {
-        "Set-Cookie": `${cookieName}=${token}; HttpOnly; SameSite=Lax; Path=/`,
+        "Set-Cookie": HttpSession.cookie(config, HttpSession.issue(config, username)),
       })
     }
 
@@ -181,16 +181,16 @@ Bun.serve({
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/logout") {
-      sessions.delete(tokenOf(request))
-      return json(request, { ok: true }, 200, { "Set-Cookie": `${cookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0` })
+      return json(request, { ok: true }, 200, { "Set-Cookie": HttpSession.cleared(config) })
     }
 
-    if (!principal(request)) return json(request, { detail: "unauthorized" }, 401)
+    const user = principal(request)
+    if (!user) return json(request, { detail: "unauthorized" }, 401)
 
     if (request.method === "GET" && url.pathname === "/api/assistant/datasets") return json(request, await datasets())
 
     if (request.method === "GET" && url.pathname === "/api/assistant/conversations") {
-      const conversations = [...chats.values()].map((chat) => ({
+      const conversations = [...chats.values()].filter((chat) => chat.owner === user).map((chat) => ({
         id: chat.id,
         title: chat.title,
         active_frame_key: null,
@@ -205,7 +205,7 @@ Bun.serve({
 
     const conversationMatch = url.pathname.match(/^\/api\/assistant\/conversations\/([^/]+)$/)
     if (conversationMatch && request.method === "GET") {
-      const chat = chats.get(conversationMatch[1])
+      const chat = ownedChat(conversationMatch[1], user)
       if (!chat) return json(request, { detail: "not found" }, 404)
       return json(request, {
         id: chat.id,
@@ -218,7 +218,7 @@ Bun.serve({
       })
     }
     if (conversationMatch && request.method === "PATCH") {
-      const chat = chats.get(conversationMatch[1])
+      const chat = ownedChat(conversationMatch[1], user)
       if (!chat) return json(request, { detail: "not found" }, 404)
       const body = (await request.json()) as { title?: string }
       chat.title = body.title?.trim() || chat.title
@@ -226,7 +226,7 @@ Bun.serve({
       return json(request, { ok: true })
     }
     if (conversationMatch && request.method === "DELETE") {
-      chats.delete(conversationMatch[1])
+      if (ownedChat(conversationMatch[1], user)) chats.delete(conversationMatch[1])
       await saveChats()
       return json(request, { ok: true })
     }
@@ -239,7 +239,7 @@ Bun.serve({
       const lists = await host.catalog()
       const dataset = lists.find((item) => item.fileID === fileID)
       if (!dataset) return json(request, { detail: "list unavailable" }, 403)
-      const existing = body.conversation_id ? chats.get(body.conversation_id) : undefined
+      const existing = ownedChat(body.conversation_id, user)
       const encoder = new TextEncoder()
       let ping: ReturnType<typeof setInterval> | undefined
       let open = true
@@ -262,6 +262,7 @@ Bun.serve({
           ;(async () => {
             const chat = existing ?? {
               id: `conv_${randomBytes(8).toString("hex")}`,
+              owner: user,
               title: question.slice(0, 80),
               fileID,
               label: dataset.label,
@@ -320,11 +321,11 @@ Bun.serve({
       if (!body) return json(request, { detail: "invalid report" }, 400)
       // Chats live only in memory, so the report carries the conversation it is about. One JSON line
       // per report keeps them searchable in the platform log; attachment bytes stay out of the log.
-      const chat = body.conversation_id ? chats.get(body.conversation_id) : undefined
+      const chat = ownedChat(body.conversation_id ?? undefined, user)
       console.log(
         `REPORT ${JSON.stringify({
           at: new Date().toISOString(),
-          principal: principal(request),
+          principal: user,
           reporter: body.reporter_name?.slice(0, 200) ?? "",
           comment: body.comment?.slice(0, 4000) ?? "",
           tz_offset_minutes: body.tz_offset_minutes,

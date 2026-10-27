@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "noUnusedLocals": true,
+    "noUncheckedIndexedAccess": false,
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
+    ]
+  }
+}
