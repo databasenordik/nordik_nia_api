@@ -2,8 +2,14 @@
 .github
 .env
 .env.*
-**/node_modules
-**/*.tsbuildinfo
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
 tests
-backend/database
+benchmarks
+.local-deploy
 gha-creds-*.json
+**/__pycache__
+pytest-cache-files-*

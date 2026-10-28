@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "Q20",
+      "source_question_id": 20,
+      "question": "How many students recorded as deceased have no community listed?",
+      "selected_file_id": 49,
+      "authorized_file_ids": [49, 91],
+      "category": "master-specific",
+      "expected_outcome": "count",
+      "expected_plan": {
+        "required_ops": ["COUNT"],
+        "predicates": [
+          {"any_of": [{"field": "deceased_status", "operator": "IS_TRUE"}, {"field": "deceased_status", "operators": ["EQUALS", "IN"], "value": "yes"}]},
+          {"field": "community", "operator": "IS_UNKNOWN"}
+        ]
+      },
+      "critical": true,
+      "private": false
+    },
+    {
+      "id": "Q37",
+      "source_question_id": 37,
+      "question": "How many students recorded as deceased have no death details recorded?",
+      "selected_file_id": 49,
+      "authorized_file_ids": [49, 91],
+      "category": "master-specific",
+      "expected_outcome": "count",
+      "expected_plan": {
+        "required_ops": ["COUNT"],
+        "predicates": [
+          {"any_of": [{"field": "deceased_status", "operator": "IS_TRUE"}, {"field": "deceased_status", "operators": ["EQUALS", "IN"], "value": "yes"}]},
+          {"field": "death_details", "operator": "IS_UNKNOWN"}
+        ]
+      },
+      "critical": true,
+      "private": false
+    },
+    {
+      "id": "Q44",
+      "source_question_id": 44,
+      "question": "Which students recorded as deceased have known information in both 'Parents Names' and 'Siblings'? Show each full name and both entries.",
+      "selected_file_id": 49,
+      "authorized_file_ids": [49, 91],
+      "category": "master-specific",
+      "expected_outcome": "list",
+      "expected_plan": {
+        "required_ops": ["FILTER", "PROJECT"],
+        "predicates": [
+          {"any_of": [{"field": "deceased_status", "operator": "IS_TRUE"}, {"field": "deceased_status", "operators": ["EQUALS", "IN"], "value": "yes"}]},
+          {"field": "parents_names", "operator": "IS_KNOWN"},
+          {"field": "siblings", "operator": "IS_KNOWN"}
+        ],
+        "project_fields": ["student_name", "parents_names", "siblings"]
+      },
+      "critical": true,
+      "private": false
+    },
+    {
+      "id": "Q57",
+      "source_question_id": 57,
+      "question": "Rank communities by the number of students with tuberculosis recorded as a cause of death, from highest to lowest, and show each count. Include a separate Not recorded category for deaths with no known community.",
+      "selected_file_id": 91,
+      "authorized_file_ids": [49, 91],
+      "category": "confirmed-specific",
+      "expected_outcome": "rank",
+      "expected_plan": {
+        "required_ops": ["RANK"],
+        "group_by": ["community"],
+        "predicates": [
+          {"field": "cause_of_death", "operators": ["CONTAINS", "CONTAINS_ANY"], "value": "tuberculosis"}
+        ]
+      },
+      "critical": true,
+      "private": false
+    },
+    {
+      "id": "Q73",
+      "source_question_id": 73,
+      "question": "Which students are from Walpole Island, and what were their ages at death, dates of death, and causes of death?",
+      "selected_file_id": 91,
+      "authorized_file_ids": [49, 91],
+      "category": "confirmed-specific",
+      "expected_outcome": "list",
+      "expected_plan": {
+        "required_ops": ["FILTER", "PROJECT"],
+        "predicates": [
+          {"field": "community", "operators": ["EQUALS", "CONTAINS", "CONTAINS_ANY"], "value": "Walpole Island"}
+        ],
+        "project_fields": ["student_name", "age_at_death", "death_date", "cause_of_death"]
+      },
+      "critical": true,
+      "private": false
+    },
+    {
+      "id": "Q75",
+      "source_question_id": 75,
+      "question": "Which communities have more than one student with tuberculosis recorded as a cause of death, and how many students are recorded for each community?",
+      "selected_file_id": 91,
+      "authorized_file_ids": [49, 91],
+      "category": "confirmed-specific",
+      "expected_outcome": "rank",
+      "expected_plan": {
+        "required_ops": ["RANK"],
+        "group_by": ["community"],
+        "having_min_count": 2,
+        "predicates": [
+          {"field": "cause_of_death", "operators": ["CONTAINS", "CONTAINS_ANY"], "value": "tuberculosis"}
+        ]
+      },
+      "critical": true,
+      "private": false
+    },
+    {
+      "id": "THREE",
+      "source_question_id": 0,
+      "question": "List students from Garden River whose first admission was after 1905 and who have tuberculosis recorded as a cause of death.",
+      "selected_file_id": 91,
+      "authorized_file_ids": [49, 91],
+      "category": "confirmed-specific",
+      "expected_outcome": "list",
+      "expected_plan": {
+        "required_ops": ["FILTER", "PROJECT"],
+        "predicates": [
+          {"field": "community", "operators": ["EQUALS", "CONTAINS", "CONTAINS_ANY"], "value": "Garden River"},
+          {"field": "first_admitted_date", "operator": "AFTER", "values": [1905, "1905", "1905-12-31"]},
+          {"field": "cause_of_death", "operators": ["CONTAINS", "CONTAINS_ANY"], "value": "tuberculosis"}
+        ]
+      },
+      "critical": true,
+      "private": false
+    },
+    {
+      "id": "A_COUNT",
+      "source_question_id": 0,
+      "question": "How many student records are there?",
+      "selected_file_id": 93,
+      "authorized_file_ids": [49, 91, 93, 94],
+      "category": "additional-deaths-specific",
+      "expected_outcome": "count",
+      "expected_plan": {"required_ops": ["COUNT"]},
+      "critical": true,
+      "private": true
+    },
+    {
+      "id": "P_COUNT",
+      "source_question_id": 0,
+      "question": "How many student records are there?",
+      "selected_file_id": 94,
+      "authorized_file_ids": [49, 91, 93, 94],
+      "category": "potential-specific",
+      "expected_outcome": "count",
+      "expected_plan": {"required_ops": ["COUNT"]},
+      "critical": true,
+      "private": true
+    },
+    {
+      "id": "P_COMMUNITY",
+      "source_question_id": 0,
+      "question": "How many students are recorded as being from Garden River?",
+      "selected_file_id": 94,
+      "authorized_file_ids": [49, 91, 93, 94],
+      "category": "potential-specific",
+      "note": "Use the recorded community column and only ACCESS=TRUE rows; compute expected counts from the current authorized snapshot.",
+      "expected_outcome": "count",
+      "expected_plan": {"required_ops": ["COUNT"], "predicates": [{"field": "community", "operators": ["EQUALS", "IN", "CONTAINS", "CONTAINS_ANY"], "value": "Garden River"}]},
+      "critical": true,
+      "private": true
+    },
+    {
+      "id": "AUTHORIZED_SWITCH",
+      "source_question_id": 0,
+      "question": "How many student records are in the Confirmed deaths list?",
+      "selected_file_id": 49,
+      "authorized_file_ids": [49, 91],
+      "category": "authorized switch-list response",
+      "expected_outcome": "dataset_not_selected",
+      "expected_status": "dataset_not_selected",
+      "expected_plan": {"forbid_query": true, "suggested_file_id": 91},
+      "critical": true,
+      "private": false
+    },
+    {
+      "id": "UNAUTHORIZED_SCOPE",
+      "source_question_id": 0,
+      "question": "Search the Potential list for Garden River.",
+      "selected_file_id": 49,
+      "authorized_file_ids": [49],
+      "category": "unauthorized generic scope refusal",
+      "expected_outcome": "dataset_not_selected",
+      "expected_status": "dataset_not_selected",
+      "expected_plan": {"forbid_query": true, "suggested_file_id": null},
+      "critical": true,
+      "private": false
+    }
+  ]
+}
