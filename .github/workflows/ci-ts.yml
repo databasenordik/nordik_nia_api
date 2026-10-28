@@ -1,0 +1,49 @@
+name: CI (TypeScript)
+
+on:
+  # Pushes to main run these checks through cd-production.yml before deploying.
+  push:
+    branches: [nia-ts-backend]
+  pull_request:
+    branches: [main, nia-ts-backend]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Tests
+        run: bun run test
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t nia-research:ci .
+      - name: Modules and the gRPC contract load inside the image
+        run: docker run --rm nia-research:ci bun -e 'for (const m of ["host", "http", "http-session", "config", "conversations", "grpc", "engine"]) await import(`./backend/src/${m}.ts`)'
+      - name: Incomplete configuration stops the process
+        run: |
+          # Must fail on configuration, before any database connection is attempted.
+          if output=$(docker run --rm -e APP_ENV=production -e NIA_TRANSPORT=grpc nia-research:ci 2>&1); then
+            echo 'The API started without its configuration'; exit 1
+          fi
+          echo "$output" | grep -q 'invalid configuration'
+      - name: A remote database without TLS is refused
+        run: |
+          if output=$(docker run --rm -e NIA_TRANSPORT=grpc -e NIA_GRPC_PRINCIPAL_ID=ci \
+              -e REASONING_BASE_URL=https://reasoning.example/v1 -e REASONING_API_KEY=k \
+              -e 'ASSISTANT_DATABASE_URL=postgresql://u:p@db.example:5432/x?sslmode=disable' nia-research:ci 2>&1); then
+            echo 'The API accepted a plain-text remote database'; exit 1
+          fi
+          echo "$output" | grep -q 'sslmode=require'

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "version": "2.0.31",
+  "name": "@opencode/ai",
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./promise": "./src/promise.ts",
+    "./testing": "./src/testing.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/credential-providers": "3.1057.0",
+    "@smithy/eventstream-codec": "4.2.14",
+    "@smithy/util-utf8": "4.2.2",
+    "@opencode/schema": "workspace:*",
+    "aws4fetch": "1.0.20",
+    "effect": "catalog:",
+    "google-auth-library": "10.5.0"
+  },
+  "private": true
+}
