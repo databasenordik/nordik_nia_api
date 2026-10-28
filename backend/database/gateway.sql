@@ -117,4 +117,8 @@ REVOKE ALL ON ALL TABLES IN SCHEMA research_api FROM opencode_research_ro;
 GRANT USAGE ON SCHEMA research_api TO opencode_research_ro;
 GRANT EXECUTE ON FUNCTION research_api.identity(),research_api.catalog(text,integer,boolean),research_api.snapshot(text,integer,boolean,text[]) TO opencode_research_ro;
 ALTER ROLE opencode_research_ro SET default_transaction_read_only=on;
+-- The deployed API connects as assistant_runtime (it also keeps conversations in the assistant schema)
+-- and calls the same three functions; nothing else in this schema is granted to it.
+GRANT USAGE ON SCHEMA research_api TO assistant_runtime;
+GRANT EXECUTE ON FUNCTION research_api.identity(),research_api.catalog(text,integer,boolean),research_api.snapshot(text,integer,boolean,text[]) TO assistant_runtime;
 COMMIT;

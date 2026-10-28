@@ -5,7 +5,9 @@ WORKDIR /app
 # patches resolve exactly as bun.lock records them.
 COPY package.json bun.lock bunfig.toml ./
 COPY backend ./backend
-RUN bun install --frozen-lockfile --production
+# PGlite is a test-only dependency, but drizzle-orm names it as an optional peer, so Bun installs it
+# even here. Nothing at runtime imports it.
+RUN bun install --frozen-lockfile --production && rm -rf node_modules/@electric-sql
 
 ENV NODE_ENV=production
 # The API listens on loopback unless told otherwise; a container must accept outside connections.
@@ -14,4 +16,8 @@ ENV APP_HOST=0.0.0.0
 ENV PORT=8080
 EXPOSE 8080
 USER bun
-CMD ["bun", "run", "backend/src/http.ts"]
+# NIA_TRANSPORT picks gRPC (nordik.nia.v1.Assistant) or HTTP, as in the Python API's image.
+# The production service was configured for the Python API, which reads the model key from XAI_API_KEY
+# and adds /v1 to REASONING_BASE_URL itself. Both are accepted here: XAI_API_KEY stands in for a missing
+# REASONING_API_KEY, and /v1 is added when the URL lacks it. exec keeps bun as PID 1 for SIGTERM.
+CMD ["sh", "-c", "export REASONING_API_KEY=\"${REASONING_API_KEY:-$XAI_API_KEY}\"; case \"$REASONING_BASE_URL\" in ''|*/v1|*/v1/) ;; *) export REASONING_BASE_URL=\"${REASONING_BASE_URL%/}/v1\" ;; esac; exec bun run backend/src/main.ts"]

@@ -9,7 +9,7 @@ export const Options = Schema.Struct({
   url: Schema.String.check(Schema.isMinLength(1)),
   principal: Schema.String.check(Schema.isMinLength(1)),
   private: Schema.Boolean,
-  ssl: Schema.Literals(["disable", "verify-full"]),
+  ssl: Schema.Literals(["disable", "require", "verify-ca", "verify-full"]),
 })
 export type Options = typeof Options.Type
 
@@ -52,14 +52,64 @@ export class AccessDeniedError extends Error {
   }
 }
 
+/**
+ * Why the connection's role may not serve research; empty when it may. Covers the Python API's startup
+ * self-test (app/db/privilege_selftest.py) and more. The API runtime role (assistant_runtime) keeps
+ * conversations in the assistant schema, so rows there may be read and written. Everything else stays
+ * refused: raw, public or released-record reads, writes in other schemas, TRUNCATE anywhere, schema
+ * CREATE, role or RLS powers and server file access. Nothing restricted is read to find this out.
+ */
+export async function privileges(client: SQL, principal: string) {
+  const failures: string[] = []
+  const [role] = await client`SELECT (
+      EXISTS(SELECT 1 FROM pg_roles WHERE rolname=current_user AND (rolsuper OR rolcreaterole OR rolcreatedb OR rolbypassrls))
+      OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname IN ('public','assistant','assistant_api','research_api') AND c.relkind IN ('r','p')
+        AND (has_table_privilege(current_user,c.oid,'TRUNCATE')
+          OR (n.nspname <> 'assistant' AND has_table_privilege(current_user,c.oid,'INSERT,UPDATE,DELETE'))
+          OR (n.nspname = 'public' AND has_table_privilege(current_user,c.oid,'SELECT'))))
+      OR has_table_privilege(current_user,'public.file_data','SELECT')
+      OR has_table_privilege(current_user,'public.file_data_normalized','SELECT')
+      OR has_table_privilege(current_user,'public.file','SELECT')
+      OR has_schema_privilege(current_user,'public','CREATE')
+      OR has_schema_privilege(current_user,'research_api','CREATE')
+      OR has_schema_privilege(current_user,'assistant','CREATE')
+      OR has_schema_privilege(current_user,'assistant_api','CREATE')
+      OR pg_has_role(current_user,'pg_execute_server_program','MEMBER')
+      OR pg_has_role(current_user,'pg_read_server_files','MEMBER')
+      OR pg_has_role(current_user,'pg_write_server_files','MEMBER')
+    ) AS unsafe,
+    -- Released records are read only through the gateway functions, never from the views directly.
+    COALESCE(has_table_privilege(current_user,to_regclass('assistant_api.v_current_records'),'SELECT'),false)
+      OR COALESCE(has_table_privilege(current_user,to_regclass('assistant_api.v_current_raw_records'),'SELECT'),false)
+      AS views,
+    -- The Potential (94) release gate lives in those views; without it unreleased rows would be read.
+    to_regprocedure('assistant_api.potential_access_revision()') IS NOT NULL
+      AND (SELECT count(*) = 2 FROM pg_class WHERE oid = ANY(ARRAY[
+        to_regclass('assistant_api.v_current_records'), to_regclass('assistant_api.v_current_raw_records')])
+        AND 'security_barrier=true' = ANY(reloptions)) AS gate`
+  if (Schema.decodeUnknownSync(Privileges)({ unsafe: role.unsafe }).unsafe)
+    failures.push("the role has privileges beyond the assistant runtime role; use assistant_runtime")
+  if (role.views) failures.push("the role can SELECT assistant_api.v_current_records or v_current_raw_records directly")
+  if (!role.gate) failures.push("the Potential release gate is not installed; apply migrations through 073")
+  if (failures.length) return failures
+  const [leak] = await client`SELECT count(*)::integer AS leaked
+    FROM assistant_api.list_datasets(${principal}, ARRAY[49,91,93,94]::integer[], false) WHERE private`
+  if (leak.leaked) failures.push("private lists are listed without a private-files grant")
+  return failures
+}
+
+// Railway's *.railway.internal names resolve only inside its encrypted private network, so they
+// count as local; anything reachable from the internet needs TLS.
+export function local(url: URL) {
+  return ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) || url.hostname.endsWith(".railway.internal")
+}
+
 export async function connect(input: Options) {
   const url = new URL(input.url)
   if (!["postgres:", "postgresql:"].includes(url.protocol))
     throw new Error("An explicit PostgreSQL profile is required")
-  // Railway's *.railway.internal names resolve only inside its encrypted private network, so they
-  // count as local; anything reachable from the internet still needs verify-full.
-  const local = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) || url.hostname.endsWith(".railway.internal")
-  if (input.ssl === "disable" && !local) throw new Error("Remote PostgreSQL profiles require verify-full TLS")
+  if (input.ssl === "disable" && !local(url)) throw new Error("Remote PostgreSQL connections require TLS")
   // Own the pool in the host scope; never forward this profile into Session environment variables.
   const client = new SQL({ url: input.url, max: 4, connectionTimeout: 10, idleTimeout: 20, ssl: input.ssl })
   const query = async <A>(
@@ -99,25 +149,8 @@ export async function connect(input: Options) {
   const close = () => client.close()
   const initialize = async () => {
     const identity = await query(Schema.decodeUnknownSync(Identity), "identity")
-    const rows = await client`SELECT (
-      EXISTS(SELECT 1 FROM pg_roles WHERE rolname=current_user AND (rolsuper OR rolcreaterole OR rolcreatedb OR rolbypassrls))
-      OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-        WHERE n.nspname IN ('public','assistant','assistant_api','research_api') AND c.relkind IN ('r','p')
-        AND (has_table_privilege(current_user,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE')
-          OR (n.nspname IN ('public','assistant') AND has_table_privilege(current_user,c.oid,'SELECT'))))
-      OR has_table_privilege(current_user,'public.file_data','SELECT')
-      OR has_table_privilege(current_user,'public.file_data_normalized','SELECT')
-      OR has_table_privilege(current_user,'public.file','SELECT')
-      OR has_schema_privilege(current_user,'public','CREATE')
-      OR has_schema_privilege(current_user,'research_api','CREATE')
-      OR has_schema_privilege(current_user,'assistant','CREATE')
-      OR has_schema_privilege(current_user,'assistant_api','CREATE')
-      OR pg_has_role(current_user,'pg_execute_server_program','MEMBER')
-      OR pg_has_role(current_user,'pg_read_server_files','MEMBER')
-      OR pg_has_role(current_user,'pg_write_server_files','MEMBER')
-    ) AS unsafe`
-    if (Schema.decodeUnknownSync(Privileges)(rows[0]).unsafe)
-      throw new Error("Research connection has unsafe privileges; use the dedicated read-only role")
+    const failures = await privileges(client, input.principal)
+    if (failures.length) throw new SelfTestError(`privilege self-test failed: ${failures.join("; ")}`)
     return {
       identity: identity.database,
       principal: input.principal,
@@ -136,12 +169,16 @@ export async function connect(input: Options) {
       close,
     }
   }
-  return initialize().catch(async () => {
+  return initialize().catch(async (error: unknown) => {
     await close()
-    // Database errors can contain a DSN, source SQL or private values. Keep that boundary redacted.
+    // The self-test's findings are fixed text, so the operator sees them. Any other database error can
+    // contain a DSN, source SQL or private values. Keep that boundary redacted.
+    if (error instanceof SelfTestError) throw error
     throw new Error("Cannot qualify the research database connection; verify role, TLS and gateway installation")
   })
 }
+
+class SelfTestError extends Error {}
 
 export type Connection = Awaited<ReturnType<typeof connect>>
 

@@ -129,10 +129,20 @@ export async function create(options: Options) {
             throw new Error("Research catalog unavailable; verify the database connection and gateway")
           return results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []))
         },
-        create: async (fileID: Research.FileID, id?: string) => {
+        /** One list's catalog entry, or undefined when it is not a research list or this principal may not open it. */
+        dataset: async (fileID: number) => {
+          const selected = Schema.decodeUnknownOption(Research.FileID)(fileID)
+          if (selected._tag === "None") return undefined
+          return connection.catalog(selected.value).catch((error: unknown) => {
+            if (error instanceof ResearchDatabase.AccessDeniedError) return undefined
+            throw error
+          })
+        },
+        /** `communities`, when given, limits the Session to records of those communities for its lifetime. */
+        create: async (fileID: number, id?: string, communities: readonly string[] = []) => {
           const selected = Schema.decodeUnknownSync(Research.FileID)(fileID)
           const dataset = await connection.catalog(selected)
-          return host.runtime.runPromise(
+          const session = await host.runtime.runPromise(
             host.sessions.create({
               id: id ? Session.ID.make(id) : undefined,
               research: { database: connection.identity, fileID: selected, principal: connection.principal },
@@ -142,6 +152,13 @@ export async function create(options: Options) {
               title: dataset.label,
             }),
           )
+          if (!communities.length) return session
+          // A Session must never answer without its limit, so one that cannot store it is removed.
+          await host.runtime.runPromise(state.scope(session.id, communities)).catch(async (error: unknown) => {
+            await host.runtime.runPromise(host.sessions.remove(session.id)).catch(() => undefined)
+            throw error
+          })
+          return session
         },
         get: requireSession,
         list: async () =>

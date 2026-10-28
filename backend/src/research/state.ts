@@ -25,13 +25,23 @@ export const make = (connection: ResearchDatabase.Connection) =>
         return yield* Effect.fail(new Error("Session has no valid permanent list binding for this database"))
       return session.research
     })
+    // A Session limited to some communities (the gRPC caller's selection) keeps that limit with its
+    // state, and every snapshot applies it, so no tool reads records outside the selection.
+    const communities = Effect.fn("Research.communities")(function* (id: string) {
+      const value = yield* kv.get(`research/${id}/communities`)
+      return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
+    })
     const snapshot = Effect.fn("Research.snapshot")(function* (id: string, fields?: readonly string[]) {
       const selected = yield* binding(id)
-      return yield* Effect.tryPromise({
-        try: (signal) => connection.snapshot(selected, signal, fields),
+      const limit = yield* communities(id)
+      const requested = limit.length && fields ? [...new Set([...fields, "community"])] : fields
+      const current = yield* Effect.tryPromise({
+        try: (signal) => connection.snapshot(selected, signal, requested),
         catch: () =>
           new Error("Selected list unavailable, access denied, or current data incomplete; no fallback was used"),
       })
+      if (!limit.length) return current
+      return withinCommunities(current, limit, !fields || fields.includes("community"))
     })
     const catalog = Effect.fn("Research.catalog")(function* (id: string) {
       const selected = yield* binding(id)
@@ -124,6 +134,7 @@ export const make = (connection: ResearchDatabase.Connection) =>
       binding,
       catalog,
       snapshot,
+      scope: (sessionID: string, values: readonly string[]) => kv.set(`research/${sessionID}/communities`, [...values]),
       load,
       run,
       answer,
@@ -158,6 +169,24 @@ export const make = (connection: ResearchDatabase.Connection) =>
   })
 
 export type Interface = Effect.Success<ReturnType<typeof make>>
+
+/** Keeps records whose community matches one of `communities`, ignoring case like the Python API's IN filter. */
+export function withinCommunities(
+  snapshot: Research.Snapshot,
+  communities: readonly string[],
+  keepField: boolean,
+): Research.Snapshot {
+  const wanted = new Set(communities.map((item) => item.toLowerCase()))
+  return {
+    ...snapshot,
+    records: snapshot.records.flatMap((record) => {
+      const community = record.values.community
+      if (community === null || community === undefined || !wanted.has(community.toLowerCase())) return []
+      if (keepField) return [record]
+      return [{ ...record, values: Object.fromEntries(Object.entries(record.values).filter(([field]) => field !== "community")) }]
+    }),
+  }
+}
 
 function queryError(error: unknown) {
   return error instanceof Error ? error : new Error("Invalid research query; check catalog capabilities")
