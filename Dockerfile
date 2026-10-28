@@ -17,7 +17,4 @@ ENV PORT=8080
 EXPOSE 8080
 USER bun
 # NIA_TRANSPORT picks gRPC (nordik.nia.v1.Assistant) or HTTP, as in the Python API's image.
-# The production service was configured for the Python API, which reads the model key from XAI_API_KEY
-# and adds /v1 to REASONING_BASE_URL itself. Both are accepted here: XAI_API_KEY stands in for a missing
-# REASONING_API_KEY, and /v1 is added when the URL lacks it. exec keeps bun as PID 1 for SIGTERM.
-CMD ["sh", "-c", "export REASONING_API_KEY=\"${REASONING_API_KEY:-$XAI_API_KEY}\"; case \"$REASONING_BASE_URL\" in ''|*/v1|*/v1/) ;; *) export REASONING_BASE_URL=\"${REASONING_BASE_URL%/}/v1\" ;; esac; exec bun run backend/src/main.ts"]
+CMD ["bun", "run", "backend/src/main.ts"]
