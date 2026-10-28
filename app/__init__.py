@@ -1,1 +1,0 @@
-"""NIA standalone assistant backend."""

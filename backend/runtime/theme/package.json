@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@opencode/theme",
+  "version": "2.0.31",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anomalyco/opencode.git",
+    "directory": "packages/theme"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./tui/nia": "./src/tui/nia.ts",
+    "./tui": "./src/tui/index.ts",
+    "./tui/v1": "./src/tui/v1.ts"
+  },
+  "dependencies": {
+    "@opentui/core": "catalog:",
+    "effect": "catalog:"
+  },
+  "private": true
+}

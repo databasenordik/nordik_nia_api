@@ -1,0 +1,29 @@
+{
+  "name": "@nia/backend",
+  "version": "2.0.31",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/host.ts",
+    "./research/*": "./src/research/*.ts",
+    "./plugin/research": "./src/plugin/research.ts",
+    "./response": "./src/research-response.ts",
+    "./http-session": "./src/http-session.ts",
+    "./config": "./src/config.ts",
+    "./engine": "./src/engine.ts",
+    "./conversations": "./src/conversations.ts",
+    "./grpc": "./src/grpc.ts",
+    "./probe": "./src/probe.ts"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "1.14.6",
+    "@grpc/proto-loader": "0.8.1",
+    "@opencode/ai": "workspace:*",
+    "@opencode/core": "workspace:*",
+    "@opencode/plugin": "workspace:*",
+    "@opencode/schema": "workspace:*",
+    "@opencode/sdk": "workspace:*",
+    "@opencode/util": "workspace:*",
+    "effect": "catalog:"
+  }
+}

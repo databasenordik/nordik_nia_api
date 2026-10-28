@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "version": "2.0.31",
+  "name": "@opencode/sdk",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anomalyco/opencode.git",
+    "directory": "packages/sdk"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./embedded": "./src/internal/host.ts",
+    ".": "./src/index.ts",
+    "./effect": "./src/effect/index.ts",
+    "./workerd": "./src/workerd.ts",
+    "./workerd/effect": "./src/effect/workerd.ts"
+  },
+  "dependencies": {
+    "@opencode/client": "workspace:*",
+    "@opencode/core": "workspace:*",
+    "@opencode/plugin": "workspace:*",
+    "@opencode/schema": "workspace:*",
+    "@opencode/server": "workspace:*",
+    "@opencode/util": "workspace:*",
+    "effect": "catalog:"
+  },
+  "private": true
+}
