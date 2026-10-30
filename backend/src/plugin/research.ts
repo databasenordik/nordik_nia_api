@@ -31,7 +31,7 @@ export function make(state: ResearchState.Interface, allowedProviders: readonly 
         editor.update(Agent.ID.make("research"), (agent) => {
           agent.name = Agent.Name.make("Nia")
           agent.system = prompt
-          agent.steps = 40
+          agent.steps = 50
           agent.permissions = [
             { action: "*", resource: "*", effect: "deny" },
             { action: "research", resource: "*", effect: "allow" },
