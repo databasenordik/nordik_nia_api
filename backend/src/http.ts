@@ -62,17 +62,17 @@ export function serve(input: {
     })
   }
 
-  function sessionBody() {
+  async function sessionBody() {
     return {
       principal_id: config.principal,
-      allowed_file_ids: [49, 91, 93, 94],
+      allowed_file_ids: (await host.lists()).map((list) => list.fileID),
       can_use_private_files: config.private,
       history_allowed: false,
     }
   }
 
   async function datasets() {
-    const lists = await host.catalog()
+    const [lists, offered] = await Promise.all([host.catalog(), host.lists()])
     return {
       datasets: lists.map((dataset) => ({
         file_id: dataset.fileID,
@@ -82,7 +82,7 @@ export function serve(input: {
         private: false,
         assistant_enabled: true,
         user_facing_label: dataset.label,
-        is_default_people_scope: dataset.fileID === 49,
+        is_default_people_scope: offered.some((list) => list.fileID === dataset.fileID && list.defaultPeople),
         fields: dataset.fields.map((field) => ({
           semantic_field: field.name,
           human_label: field.label,
@@ -111,14 +111,14 @@ export function serve(input: {
         if (!body) return json(request, { detail: "invalid login request" }, 400)
         const username = HttpSession.login(auth, body.username?.trim() ?? "", body.password ?? "")
         if (!username) return json(request, { detail: "unauthorized" }, 401)
-        return json(request, sessionBody(), 200, {
+        return json(request, await sessionBody(), 200, {
           "Set-Cookie": HttpSession.cookie(auth, HttpSession.issue(auth, username)),
         })
       }
 
       if (request.method === "GET" && url.pathname === "/api/auth/session") {
         if (!principal(request)) return new Response(null, { status: 204, headers: cors(request) })
-        return json(request, sessionBody())
+        return json(request, await sessionBody())
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/logout") {

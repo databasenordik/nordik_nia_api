@@ -20,8 +20,15 @@ const database = await postgres(`
   CREATE FUNCTION assistant_api.list_datasets(p_principal text, p_ids integer[], p_private boolean)
     RETURNS TABLE(file_id integer, private boolean) LANGUAGE sql SECURITY DEFINER
     AS $$ SELECT file_id, private FROM assistant_api.datasets WHERE file_id = ANY(p_ids) AND (p_private OR NOT private) $$;
+  CREATE TABLE public.data_config (file_id bigint, is_active boolean);
+  INSERT INTO public.data_config VALUES (49, true), (91, true), (93, true);
+  -- As in gateway.sql: the active lists in data_config that list_datasets opens to the principal.
+  CREATE FUNCTION research_api.lists(p_principal text, p_private boolean) RETURNS jsonb LANGUAGE sql SECURITY DEFINER
+    AS $$ SELECT COALESCE(jsonb_agg(jsonb_build_object('fileID', d.file_id, 'defaultPeople', false, 'private', d.private)), '[]'::jsonb)
+      FROM assistant_api.list_datasets(p_principal, ARRAY(SELECT file_id::integer FROM public.data_config WHERE is_active), p_private) d $$;
   CREATE ROLE assistant_runtime NOLOGIN;
   GRANT USAGE ON SCHEMA assistant, assistant_api, research_api TO assistant_runtime;
+  GRANT EXECUTE ON FUNCTION research_api.lists(text, boolean) TO assistant_runtime;
   GRANT SELECT, INSERT, UPDATE, DELETE ON assistant.conversations TO assistant_runtime;
 `)
 afterAll(() => database[Symbol.asyncDispose]())
