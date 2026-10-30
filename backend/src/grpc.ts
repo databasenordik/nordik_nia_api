@@ -231,6 +231,7 @@ export function handlers(input: {
       status = "planner_unavailable"
       answer = unavailable
     }
+    const modelMs = Math.round(performance.now() - started)
     if (signal.aborted) throw new Error("cancelled")
     const exchangeID = await input.store.record(current, conversation, {
       question: request.question,
@@ -252,6 +253,19 @@ export function handlers(input: {
         e2e_ms: Math.round(performance.now() - started),
       },
     })
+    // One JSON line per query keeps answer times searchable in the platform log; the question stays out.
+    console.log(
+      `QUERY ${JSON.stringify({
+        at: askedAt.toISOString(),
+        transport: "grpc",
+        status,
+        model,
+        file_id: current.fileID,
+        conversation_id: conversation.id,
+        model_ms: modelMs,
+        total_ms: Math.round(performance.now() - started),
+      })}`,
+    )
     const result = turnResult({ status, answer, conversationID: conversation.id, exchangeID, fileID: current.fileID, model })
     return {
       status,

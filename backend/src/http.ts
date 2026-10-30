@@ -62,17 +62,17 @@ export function serve(input: {
     })
   }
 
-  function sessionBody() {
+  async function sessionBody() {
     return {
       principal_id: config.principal,
-      allowed_file_ids: [49, 91, 93, 94],
+      allowed_file_ids: (await host.lists()).map((list) => list.fileID),
       can_use_private_files: config.private,
       history_allowed: false,
     }
   }
 
   async function datasets() {
-    const lists = await host.catalog()
+    const [lists, offered] = await Promise.all([host.catalog(), host.lists()])
     return {
       datasets: lists.map((dataset) => ({
         file_id: dataset.fileID,
@@ -82,7 +82,7 @@ export function serve(input: {
         private: false,
         assistant_enabled: true,
         user_facing_label: dataset.label,
-        is_default_people_scope: dataset.fileID === 49,
+        is_default_people_scope: offered.some((list) => list.fileID === dataset.fileID && list.defaultPeople),
         fields: dataset.fields.map((field) => ({
           semantic_field: field.name,
           human_label: field.label,
@@ -111,14 +111,14 @@ export function serve(input: {
         if (!body) return json(request, { detail: "invalid login request" }, 400)
         const username = HttpSession.login(auth, body.username?.trim() ?? "", body.password ?? "")
         if (!username) return json(request, { detail: "unauthorized" }, 401)
-        return json(request, sessionBody(), 200, {
+        return json(request, await sessionBody(), 200, {
           "Set-Cookie": HttpSession.cookie(auth, HttpSession.issue(auth, username)),
         })
       }
 
       if (request.method === "GET" && url.pathname === "/api/auth/session") {
         if (!principal(request)) return new Response(null, { status: 204, headers: cors(request) })
-        return json(request, sessionBody())
+        return json(request, await sessionBody())
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/logout") {
@@ -214,11 +214,25 @@ export function serve(input: {
               if (existing && !(await host.get(chat.sessionID).catch(() => undefined)))
                 chat.sessionID = (await host.create(chat.fileID)).id
               chats.set(chat.id, chat)
+              const askedAt = new Date()
+              const started = performance.now()
               const answer = await host.prompt(chat.sessionID, question, (event) => {
                 if (event.type !== "text") return
                 if (event.reset) send("answer_reset", {})
                 send("answer_delta", { text: event.delta })
               })
+              // One JSON line per query keeps answer times searchable in the platform log; the question stays out.
+              console.log(
+                `QUERY ${JSON.stringify({
+                  at: askedAt.toISOString(),
+                  transport: "http",
+                  status: "answered",
+                  model: config.model.slice(config.model.indexOf("/") + 1),
+                  file_id: fileID,
+                  conversation_id: chat.id,
+                  model_ms: Math.round(performance.now() - started),
+                })}`,
+              )
               const citations = answer.evidence.map((item) => item.id)
               chat.turns.push({ role: "user", text: question }, { role: "assistant", text: answer.text, citations })
               // answer_completed carries the authoritative text; the frontend replaces the streamed draft with it.

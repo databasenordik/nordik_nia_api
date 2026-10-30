@@ -28,7 +28,7 @@ SET search_path = pg_catalog, research_api, assistant_api, assistant, public, pg
 AS $$
 DECLARE result jsonb;
 BEGIN
-  IF p_file_id NOT IN (49,91,93,94) OR NOT (p_file_id = ANY(assistant_api._authorized_file_ids(p_principal, ARRAY[p_file_id], p_private))) THEN
+  IF NOT EXISTS(SELECT 1 FROM public.data_config c WHERE c.file_id=p_file_id AND c.is_active) OR NOT (p_file_id = ANY(assistant_api._authorized_file_ids(p_principal, ARRAY[p_file_id], p_private))) THEN
     RAISE EXCEPTION 'List unavailable or access denied' USING ERRCODE='42501';
   END IF;
   SELECT jsonb_build_object('fileID', d.file_id, 'label', d.user_facing_label, 'version', d.current_version,
@@ -42,6 +42,18 @@ BEGIN
   IF result IS NULL THEN RAISE EXCEPTION 'List unavailable or access denied' USING ERRCODE='42501'; END IF;
   RETURN result;
 END $$;
+
+-- The lists the assistant offers: active in public.data_config and open to this principal under the
+-- dataset policy. Which lists exist is data, so a new list needs a data_config row, not a code change.
+CREATE OR REPLACE FUNCTION research_api.lists(p_principal text, p_private boolean)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, research_api, assistant_api, assistant, public, pg_temp
+AS $$
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('fileID', d.file_id, 'defaultPeople', COALESCE(d.is_default_people_scope, false),
+    'private', d.private) ORDER BY d.file_id), '[]'::jsonb)
+  FROM assistant_api.list_datasets(p_principal,
+    ARRAY(SELECT c.file_id::integer FROM public.data_config c WHERE c.is_active), p_private) d
+$$;
 
 DROP FUNCTION IF EXISTS research_api.snapshot(text,integer,boolean);
 CREATE OR REPLACE FUNCTION research_api.snapshot(p_principal text, p_file_id integer, p_private boolean, p_fields text[] DEFAULT NULL)
@@ -111,14 +123,15 @@ END $$;
 
 ALTER FUNCTION research_api.identity() OWNER TO assistant_gateway_owner;
 ALTER FUNCTION research_api.catalog(text,integer,boolean) OWNER TO assistant_gateway_owner;
+ALTER FUNCTION research_api.lists(text,boolean) OWNER TO assistant_gateway_owner;
 ALTER FUNCTION research_api.snapshot(text,integer,boolean,text[]) OWNER TO assistant_gateway_owner;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA research_api FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA research_api FROM opencode_research_ro;
 GRANT USAGE ON SCHEMA research_api TO opencode_research_ro;
-GRANT EXECUTE ON FUNCTION research_api.identity(),research_api.catalog(text,integer,boolean),research_api.snapshot(text,integer,boolean,text[]) TO opencode_research_ro;
+GRANT EXECUTE ON FUNCTION research_api.identity(),research_api.lists(text,boolean),research_api.catalog(text,integer,boolean),research_api.snapshot(text,integer,boolean,text[]) TO opencode_research_ro;
 ALTER ROLE opencode_research_ro SET default_transaction_read_only=on;
 -- The deployed API connects as assistant_runtime (it also keeps conversations in the assistant schema)
--- and calls the same three functions; nothing else in this schema is granted to it.
+-- and calls the same four functions; nothing else in this schema is granted to it.
 GRANT USAGE ON SCHEMA research_api TO assistant_runtime;
-GRANT EXECUTE ON FUNCTION research_api.identity(),research_api.catalog(text,integer,boolean),research_api.snapshot(text,integer,boolean,text[]) TO assistant_runtime;
+GRANT EXECUTE ON FUNCTION research_api.identity(),research_api.lists(text,boolean),research_api.catalog(text,integer,boolean),research_api.snapshot(text,integer,boolean,text[]) TO assistant_runtime;
 COMMIT;

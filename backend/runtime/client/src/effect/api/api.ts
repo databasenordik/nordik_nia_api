@@ -207,7 +207,7 @@ export type SessionCreateInput = {
   readonly location?: Location.PublicRef | undefined
   readonly metadata?: Session.Metadata | undefined
   readonly research?:
-    | { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string | undefined }
+    | { readonly database: string; readonly fileID: number; readonly principal?: string | undefined }
     | undefined
   readonly permissions?: Permission.Ruleset | undefined
 }
@@ -453,7 +453,7 @@ export type SessionLogOutput =
             readonly research?:
               | {
                   readonly database: string
-                  readonly fileID: 49 | 91 | 93 | 94
+                  readonly fileID: number
                   readonly principal?: string | undefined
                 }
               | undefined

@@ -19,6 +19,10 @@ const Identity = Schema.Struct({
   dates: Schema.Literal(ResearchValues.semantics),
 })
 const Privileges = Schema.Struct({ unsafe: Schema.Boolean })
+/** A list the assistant offers: active in public.data_config and open to this principal. */
+export const List = Schema.Struct({ fileID: Research.FileID, defaultPeople: Schema.Boolean, private: Schema.Boolean })
+export interface List extends Schema.Schema.Type<typeof List> {}
+const decodeLists = Schema.decodeUnknownSync(Schema.Array(List))
 const decodeDataset = (value: unknown) => capabilities(Schema.decodeUnknownSync(Research.Dataset)(value))
 const decodeSnapshot = (value: unknown) => {
   const snapshot = Schema.decodeUnknownSync(Research.Snapshot)(value)
@@ -94,7 +98,7 @@ export async function privileges(client: SQL, principal: string) {
   if (!role.gate) failures.push("the Potential release gate is not installed; apply migrations through 073")
   if (failures.length) return failures
   const [leak] = await client`SELECT count(*)::integer AS leaked
-    FROM assistant_api.list_datasets(${principal}, ARRAY[49,91,93,94]::integer[], false) WHERE private`
+    FROM jsonb_array_elements(research_api.lists(${principal}, false)) list WHERE (list->>'private')::boolean`
   if (leak.leaked) failures.push("private lists are listed without a private-files grant")
   return failures
 }
@@ -114,7 +118,7 @@ export async function connect(input: Options) {
   const client = new SQL({ url: input.url, max: 4, connectionTimeout: 10, idleTimeout: 20, ssl: input.ssl })
   const query = async <A>(
     decode: (value: unknown) => A,
-    name: "identity" | "catalog" | "snapshot",
+    name: "identity" | "lists" | "catalog" | "snapshot",
     fileID?: Research.FileID,
     signal?: AbortSignal,
     fields?: readonly string[],
@@ -127,9 +131,11 @@ export async function connect(input: Options) {
         const pending =
           name === "identity"
             ? tx`SELECT research_api.identity() AS value`
-            : name === "catalog"
-              ? tx`SELECT research_api.catalog(${input.principal},${fileID},${input.private}) AS value`
-              : tx`SELECT research_api.snapshot(${input.principal},${fileID},${input.private},${fields ? tx.array([...fields], "TEXT") : null}) AS value`
+            : name === "lists"
+              ? tx`SELECT research_api.lists(${input.principal},${input.private}) AS value`
+              : name === "catalog"
+                ? tx`SELECT research_api.catalog(${input.principal},${fileID},${input.private}) AS value`
+                : tx`SELECT research_api.snapshot(${input.principal},${fileID},${input.private},${fields ? tx.array([...fields], "TEXT") : null}) AS value`
         const cancel = () => pending.cancel()
         signal?.throwIfAborted()
         signal?.addEventListener("abort", cancel, { once: true })
@@ -154,6 +160,7 @@ export async function connect(input: Options) {
     return {
       identity: identity.database,
       principal: input.principal,
+      lists: (signal?: AbortSignal) => query(decodeLists, "lists", undefined, signal),
       catalog: (fileID: Research.FileID, signal?: AbortSignal) => query(decodeDataset, "catalog", fileID, signal),
       snapshot: async (binding: Research.Binding, signal?: AbortSignal, fields?: readonly string[]) => {
         if (binding.database !== identity.database) throw new Error("Session belongs to a different database")
