@@ -214,11 +214,25 @@ export function serve(input: {
               if (existing && !(await host.get(chat.sessionID).catch(() => undefined)))
                 chat.sessionID = (await host.create(chat.fileID)).id
               chats.set(chat.id, chat)
+              const askedAt = new Date()
+              const started = performance.now()
               const answer = await host.prompt(chat.sessionID, question, (event) => {
                 if (event.type !== "text") return
                 if (event.reset) send("answer_reset", {})
                 send("answer_delta", { text: event.delta })
               })
+              // One JSON line per query keeps answer times searchable in the platform log; the question stays out.
+              console.log(
+                `QUERY ${JSON.stringify({
+                  at: askedAt.toISOString(),
+                  transport: "http",
+                  status: "answered",
+                  model: config.model.slice(config.model.indexOf("/") + 1),
+                  file_id: fileID,
+                  conversation_id: chat.id,
+                  model_ms: Math.round(performance.now() - started),
+                })}`,
+              )
               const citations = answer.evidence.map((item) => item.id)
               chat.turns.push({ role: "user", text: question }, { role: "assistant", text: answer.text, citations })
               // answer_completed carries the authoritative text; the frontend replaces the streamed draft with it.
