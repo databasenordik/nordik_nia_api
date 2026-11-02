@@ -3,7 +3,10 @@ export * as Research from "./research.js"
 import { Schema } from "effect"
 import { optional } from "./schema.js"
 
-export const FileID = Schema.Literals([49, 91, 93, 94]).annotate({ identifier: "Research.FileID" })
+// Which lists exist is data (public.data_config through the gateway), not code; any positive id may name one.
+export const FileID = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 2_147_483_647 })).annotate({
+  identifier: "Research.FileID",
+})
 export type FileID = typeof FileID.Type
 
 export const Binding = Schema.Struct({
@@ -12,13 +15,6 @@ export const Binding = Schema.Struct({
   principal: Schema.String.pipe(optional),
 }).annotate({ identifier: "Research.Binding" })
 export interface Binding extends Schema.Schema.Type<typeof Binding> {}
-
-export const labels: { [ID in FileID]: string } = {
-  49: "Student master list",
-  91: "Confirmed deaths",
-  93: "Additional Deaths",
-  94: "Potential",
-}
 
 export const Operator = Schema.Literals([
   "EQUALS",

@@ -118,10 +118,11 @@ export async function create(options: Options) {
       }
       const active = new Set<string>()
       return {
+        /** The lists this principal may open, as public.data_config and the dataset policy define them. */
+        lists: () => connection.lists(),
         catalog: async () => {
-          const results = await Promise.allSettled(
-            Schema.Literals([49, 91, 93, 94]).literals.map((id) => connection.catalog(id)),
-          )
+          const lists = await connection.lists()
+          const results = await Promise.allSettled(lists.map((list) => connection.catalog(list.fileID)))
           const failed = results.find(
             (result) => result.status === "rejected" && !(result.reason instanceof ResearchDatabase.AccessDeniedError),
           )
