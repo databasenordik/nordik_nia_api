@@ -70,7 +70,7 @@ jobs:
           gcloud run deploy "$CLOUD_RUN_SERVICE" \
             --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE_URI" \
             --ingress all --allow-unauthenticated \
-            --min-instances 1 --max-instances 3 --cpu 1 --memory 2Gi --port 8080 \
+            --min-instances 0 --max-instances 20 --cpu 1 --memory 2Gi --port 8080 \
             --timeout 900 "${TRANSPORT_FLAGS[@]}" --quiet
       - name: Verify Cloud Run revision readiness
         run: |
