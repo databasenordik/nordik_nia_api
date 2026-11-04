@@ -56,6 +56,55 @@ export class AccessDeniedError extends Error {
   }
 }
 
+// Only fixed messages cross the startup boundary. Driver messages, SQL, detail, hint and causes can
+// contain credentials or source values, including when the gateway raises an exception itself.
+const qualificationReasons = new Map([
+  ["28P01", "authentication failed; verify the ASSISTANT_DATABASE_URL username and password"],
+  ["28000", "database login was rejected; verify the runtime role and database authentication rules"],
+  ["3D000", "the configured database does not exist; verify ASSISTANT_DATABASE_URL"],
+  ["42501", "permission denied; verify the runtime role's schema USAGE and gateway EXECUTE grants"],
+  ...["3F000", "42883", "42P01", "42704"].map((code) =>
+    [code, "required database objects are missing; install the research gateway and its prerequisite migrations"] as const,
+  ),
+  ...["ENOTFOUND", "EAI_AGAIN", "DNS_ENOTFOUND", "DNS_ESERVFAIL"].map((code) =>
+    [code, "database hostname lookup failed; verify DNS and the database host in ASSISTANT_DATABASE_URL"] as const,
+  ),
+  ...["ECONNREFUSED", "ERR_POSTGRES_CONNECTION_REFUSED"].map((code) =>
+    [code, "database connection refused; verify the database host, port and network access"] as const,
+  ),
+  ...["ETIMEDOUT", "ERR_POSTGRES_CONNECTION_TIMEOUT"].map((code) =>
+    [code, "database connection timed out; verify routing, firewall rules and database availability"] as const,
+  ),
+  ...["ECONNRESET", "ERR_POSTGRES_CONNECTION_CLOSED", "ERR_POSTGRES_CONNECTION_FAILED", "57P03"].map((code) =>
+    [code, "database connection unavailable or closed; verify database availability and network access"] as const,
+  ),
+  ...["ERR_POSTGRES_TLS_NOT_AVAILABLE", "ERR_POSTGRES_TLS_UPGRADE_FAILED"].map((code) =>
+    [code, "database TLS negotiation failed; verify the server's TLS support and SSL configuration"] as const,
+  ),
+  ...[
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "CERT_HAS_EXPIRED",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+  ].map((code) =>
+    [code, "database TLS certificate verification failed; verify the trusted CA, certificate and hostname"] as const,
+  ),
+  ["53300", "database connection limit reached; verify pool sizes and available database connections"],
+])
+
+function qualificationReason(error: unknown) {
+  if (typeof error === "object" && error !== null) {
+    const details = error as { errno?: unknown; code?: unknown }
+    for (const code of [details.errno, details.code]) {
+      const reason = typeof code === "string" ? qualificationReasons.get(code) : undefined
+      if (reason) return reason
+    }
+  }
+  return "verify database availability, role, TLS and gateway installation"
+}
+
 /**
  * Why the connection's role may not serve research; empty when it may. Covers the Python API's startup
  * self-test (app/db/privilege_selftest.py) and more. The API runtime role (assistant_runtime) keeps
@@ -147,14 +196,24 @@ export async function connect(input: Options) {
         }
       })
       .catch((error: unknown) => {
+        // connect() owns the identity check and reports a safe startup diagnosis with its phase.
+        if (name === "identity") throw error
         if (error instanceof SQL.PostgresError && (error.errno === "42501" || error.code === "42501"))
           throw new AccessDeniedError()
         throw new Error("Research database request failed; verify availability, permissions and current normalization")
       })
   }
   const close = () => client.close()
+  let phase = "gateway identity"
   const initialize = async () => {
-    const identity = await query(Schema.decodeUnknownSync(Identity), "identity")
+    const identity = await query((value) => {
+      if (!Schema.is(Identity)(value))
+        throw new SelfTestError(
+          "Cannot qualify the research database connection at gateway identity: incompatible gateway contract or date semantics; update the research gateway installation",
+        )
+      return value
+    }, "identity")
+    phase = "privilege self-test"
     const failures = await privileges(client, input.principal)
     if (failures.length) throw new SelfTestError(`privilege self-test failed: ${failures.join("; ")}`)
     return {
@@ -177,11 +236,12 @@ export async function connect(input: Options) {
     }
   }
   return initialize().catch(async (error: unknown) => {
-    await close()
+    // A cleanup error must not replace the safe diagnosis with a raw driver exception.
+    await close().catch(() => {})
     // The self-test's findings are fixed text, so the operator sees them. Any other database error can
     // contain a DSN, source SQL or private values. Keep that boundary redacted.
     if (error instanceof SelfTestError) throw error
-    throw new Error("Cannot qualify the research database connection; verify role, TLS and gateway installation")
+    throw new Error(`Cannot qualify the research database connection at ${phase}: ${qualificationReason(error)}`)
   })
 }
 

@@ -41,7 +41,7 @@ export interface Engine {
   }) => Promise<string>
 }
 
-type Host = Pick<ResearchHost.Interface, "dataset" | "get" | "create" | "prompt" | "interrupt">
+type Host = Pick<ResearchHost.Interface, "dataset" | "get" | "create" | "prompt">
 
 /**
  * Adapts ResearchHost: one research Session per conversation and community selection.
@@ -60,7 +60,7 @@ export function engine(host: Host, options: { readonly concurrency?: number } = 
         .catch(() => undefined)
         .then(() =>
           slot(async () => {
-            if (input.signal.aborted) throw new Error("cancelled")
+            input.signal.throwIfAborted()
             const key = JSON.stringify(input.communities)
             const known = sessions.get(input.conversationID)
             const reusable = known?.key === key && (await host.get(known.id).catch(() => undefined)) !== undefined
@@ -71,18 +71,14 @@ export function engine(host: Host, options: { readonly concurrency?: number } = 
               sessionID = (await host.create(input.fileID, undefined, input.communities)).id
               question = withContext(await input.history(), input.question)
             }
+            input.signal.throwIfAborted()
             sessions.set(input.conversationID, { id: sessionID, key })
-            // A cancelled call (the caller gave up or its deadline passed) interrupts the Session.
-            const stop = () => void host.interrupt(sessionID).catch(() => undefined)
-            input.signal.addEventListener("abort", stop, { once: true })
             try {
-              return (await host.prompt(sessionID, question)).text
+              return (await host.prompt(sessionID, question, undefined, input.signal)).text
             } catch (error) {
               // An interrupted or failed Session may still be busy; the next question starts a fresh one.
               sessions.delete(input.conversationID)
               throw error
-            } finally {
-              input.signal.removeEventListener("abort", stop)
             }
           }),
         )

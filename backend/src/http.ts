@@ -182,6 +182,8 @@ export function serve(input: {
         if (!dataset) return json(request, { detail: "list unavailable" }, 403)
         const existing = ownedChat(body.conversation_id, user)
         const encoder = new TextEncoder()
+        const controller = new AbortController()
+        const signal = AbortSignal.any([request.signal, controller.signal])
         let ping: ReturnType<typeof setInterval> | undefined
         let open = true
         // The answer is produced while the stream is already open: plan_started goes out at once
@@ -201,6 +203,7 @@ export function serve(input: {
             send("plan_started", { question })
             ping = setInterval(() => write(": ping\n\n"), 5000)
             ;(async () => {
+              signal.throwIfAborted()
               const chat = existing ?? {
                 id: `conv_${randomBytes(8).toString("hex")}`,
                 owner: user,
@@ -216,11 +219,16 @@ export function serve(input: {
               chats.set(chat.id, chat)
               const askedAt = new Date()
               const started = performance.now()
-              const answer = await host.prompt(chat.sessionID, question, (event) => {
-                if (event.type !== "text") return
-                if (event.reset) send("answer_reset", {})
-                send("answer_delta", { text: event.delta })
-              })
+              const answer = await host.prompt(
+                chat.sessionID,
+                question,
+                (event) => {
+                  if (event.type !== "text") return
+                  if (event.reset) send("answer_reset", {})
+                  send("answer_delta", { text: event.delta })
+                },
+                signal,
+              )
               // One JSON line per query keeps answer times searchable in the platform log; the question stays out.
               console.log(
                 `QUERY ${JSON.stringify({
@@ -250,12 +258,15 @@ export function serve(input: {
               })
             })()
               // Closing without answer_completed makes the frontend report the failure.
-              .catch((error) => console.error("assistant query failed", error))
+              .catch((error) => {
+                if (!signal.aborted) console.error("assistant query failed", error)
+              })
               .finally(finish)
           },
           cancel() {
             open = false
             clearInterval(ping)
+            controller.abort()
           },
         })
         return new Response(stream, {
