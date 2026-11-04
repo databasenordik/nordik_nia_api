@@ -61,6 +61,8 @@ jobs:
           # The port opens only once the database checks and the engine are up, so the startup probe
           # gates traffic; a revision that fails it never serves and the previous one keeps serving.
           # Follow-ups that reach another instance rebuild their context from the history in Postgres.
+          # Allow scale-to-zero and bill only for requests. A warm minimum instance is billable even
+          # when the active-instance graph reads zero. Clear both service and revision minimums.
           TRANSPORT_FLAGS=()
           if [ "$NIA_TRANSPORT" = grpc ]; then
             TRANSPORT_FLAGS+=(--use-http2 --startup-probe=tcpSocket.port=8080,timeoutSeconds=1,periodSeconds=10,failureThreshold=24)
@@ -70,7 +72,8 @@ jobs:
           gcloud run deploy "$CLOUD_RUN_SERVICE" \
             --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE_URI" \
             --ingress all --allow-unauthenticated \
-            --min-instances 1 --max-instances 3 --cpu 1 --memory 2Gi --port 8080 \
+            --min 0 --min-instances 0 --cpu-throttling \
+            --max-instances 3 --cpu 1 --memory 2Gi --port 8080 \
             --timeout 900 "${TRANSPORT_FLAGS[@]}" --quiet
       - name: Verify Cloud Run revision readiness
         run: |

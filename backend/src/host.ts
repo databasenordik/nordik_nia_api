@@ -180,8 +180,10 @@ export async function create(options: Options) {
             throw new Error("Source evidence is stale; replay the query against the latest publication")
           return evidence
         },
-        prompt: async (sessionID: string, text: string, progress?: (event: Progress) => void) => {
+        prompt: async (sessionID: string, text: string, progress?: (event: Progress) => void, signal?: AbortSignal) => {
+          signal?.throwIfAborted()
           await requireSession(sessionID)
+          signal?.throwIfAborted()
           if (active.has(sessionID)) throw new Error("This Session is already answering a question")
           if (!text.trim() || text.length > 16000) throw new Error("Enter a question of 1–16000 characters")
           active.add(sessionID)
@@ -190,6 +192,12 @@ export async function create(options: Options) {
             const admitted = await host.runtime.runPromise(
               host.sessions.prompt({ sessionID: Session.ID.make(sessionID), text, resume: false }),
             )
+            if (signal?.aborted) {
+              await host.runtime.runPromise(
+                host.sessions.cancelInbox({ sessionID: Session.ID.make(sessionID), inboxID: admitted.id }),
+              )
+              signal.throwIfAborted()
+            }
             const watch = host.runtime.runFork(
               host.sessions.log({ sessionID: Session.ID.make(sessionID), follow: true }).pipe(
                 Stream.runForEach((event) =>
@@ -233,8 +241,26 @@ export async function create(options: Options) {
               }),
             )
             await host.runtime
-              .runPromise(host.sessions.resume(Session.ID.make(sessionID)))
+              .runPromise(
+                // Resume joins an independently owned execution. Interrupt that execution as well
+                // as the waiter, so disconnects stop provider requests and database tools.
+                host.sessions.resume(Session.ID.make(sessionID)).pipe(
+                  Effect.onInterrupt(() =>
+                    host.sessions.interrupt(Session.ID.make(sessionID)).pipe(
+                      Effect.andThen(
+                        host.sessions.cancelInbox({ sessionID: Session.ID.make(sessionID), inboxID: admitted.id }).pipe(
+                          // Once promoted, the prompt is no longer in the inbox.
+                          Effect.catchTag("Session.InboxConflictError", () => Effect.void),
+                        ),
+                      ),
+                      Effect.ignore,
+                    ),
+                  ),
+                ),
+                { signal },
+              )
               .finally(() => host.runtime.runPromise(Fiber.interruptAll([watch, live])))
+            signal?.throwIfAborted()
             const answer = await host.runtime.runPromise(state.latest(sessionID))
             const messages = await host.runtime.runPromise(
               host.sessions.messages({

@@ -182,6 +182,8 @@ export function serve(input: {
         if (!dataset) return json(request, { detail: "list unavailable" }, 403)
         const existing = ownedChat(body.conversation_id, user)
         const encoder = new TextEncoder()
+        const controller = new AbortController()
+        const signal = AbortSignal.any([request.signal, controller.signal])
         let ping: ReturnType<typeof setInterval> | undefined
         let open = true
         // The answer is produced while the stream is already open: plan_started goes out at once
@@ -201,6 +203,7 @@ export function serve(input: {
             send("plan_started", { question })
             ping = setInterval(() => write(": ping\n\n"), 5000)
             ;(async () => {
+              signal.throwIfAborted()
               const chat = existing ?? {
                 id: `conv_${randomBytes(8).toString("hex")}`,
                 owner: user,
@@ -214,11 +217,16 @@ export function serve(input: {
               if (existing && !(await host.get(chat.sessionID).catch(() => undefined)))
                 chat.sessionID = (await host.create(chat.fileID)).id
               chats.set(chat.id, chat)
-              const answer = await host.prompt(chat.sessionID, question, (event) => {
-                if (event.type !== "text") return
-                if (event.reset) send("answer_reset", {})
-                send("answer_delta", { text: event.delta })
-              })
+              const answer = await host.prompt(
+                chat.sessionID,
+                question,
+                (event) => {
+                  if (event.type !== "text") return
+                  if (event.reset) send("answer_reset", {})
+                  send("answer_delta", { text: event.delta })
+                },
+                signal,
+              )
               const citations = answer.evidence.map((item) => item.id)
               chat.turns.push({ role: "user", text: question }, { role: "assistant", text: answer.text, citations })
               // answer_completed carries the authoritative text; the frontend replaces the streamed draft with it.
@@ -236,12 +244,15 @@ export function serve(input: {
               })
             })()
               // Closing without answer_completed makes the frontend report the failure.
-              .catch((error) => console.error("assistant query failed", error))
+              .catch((error) => {
+                if (!signal.aborted) console.error("assistant query failed", error)
+              })
               .finally(finish)
           },
           cancel() {
             open = false
             clearInterval(ping)
+            controller.abort()
           },
         })
         return new Response(stream, {

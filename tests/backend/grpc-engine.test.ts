@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { setTimeout } from "node:timers/promises"
 import { NiaGrpc } from "@nia/backend/grpc"
 
 // NiaGrpc.engine over a stand-in for ResearchHost: Session reuse, context rebuilt from history,
@@ -6,7 +7,7 @@ import { NiaGrpc } from "@nia/backend/grpc"
 function fakeHost() {
   const created: { id: string; communities: readonly string[] }[] = []
   const prompts: { sessionID: string; text: string }[] = []
-  const interrupted: string[] = []
+  const signals: (AbortSignal | undefined)[] = []
   const live = new Set<string>()
   const state = { delay: 0, fail: false, active: 0, peak: 0 }
   const host = {
@@ -21,23 +22,21 @@ function fakeHost() {
       live.add(id)
       return { id }
     },
-    prompt: async (sessionID: string, text: string) => {
+    prompt: async (sessionID: string, text: string, _progress?: unknown, signal?: AbortSignal) => {
       prompts.push({ sessionID, text })
+      signals.push(signal)
       if (state.fail) throw new Error("provider unavailable")
       state.active++
       state.peak = Math.max(state.peak, state.active)
       try {
-        await Bun.sleep(state.delay)
+        await setTimeout(state.delay, undefined, { signal })
         return { text: `answer ${prompts.length}` }
       } finally {
         state.active--
       }
     },
-    interrupt: async (id: string) => {
-      interrupted.push(id)
-    },
   }
-  return { host: host as unknown as Parameters<typeof NiaGrpc.engine>[0], created, prompts, interrupted, live, state }
+  return { host: host as unknown as Parameters<typeof NiaGrpc.engine>[0], created, prompts, signals, live, state }
 }
 
 const ask = (overrides: Partial<Parameters<NiaGrpc.Engine["answer"]>[0]> = {}) => ({
@@ -105,16 +104,45 @@ test("questions in one conversation are answered one after another", async () =>
   expect(fake.state.peak).toBe(1)
 })
 
-test("a cancelled call interrupts its Session", async () => {
+test("a cancelled call aborts its prompt and releases its concurrency slot", async () => {
   const fake = fakeHost()
   fake.state.delay = 50
-  const engine = NiaGrpc.engine(fake.host)
+  const engine = NiaGrpc.engine(fake.host, { concurrency: 1 })
   const controller = new AbortController()
   const answer = engine.answer(ask({ signal: controller.signal }))
   await Bun.sleep(10)
   controller.abort()
-  await answer
-  expect(fake.interrupted).toEqual(["ses_0"])
+  await expect(answer).rejects.toThrow()
+  expect(fake.signals).toEqual([controller.signal])
+  fake.state.delay = 0
+  expect(await engine.answer(ask())).toBe("answer 2")
+  expect(fake.prompts.map((prompt) => prompt.sessionID)).toEqual(["ses_0", "ses_1"])
+  expect(fake.state.peak).toBe(1)
+})
+
+test("cancellation while loading history never starts a provider prompt", async () => {
+  const fake = fakeHost()
+  const engine = NiaGrpc.engine(fake.host)
+  const controller = new AbortController()
+  await expect(engine.answer(ask({
+    signal: controller.signal,
+    history: async () => {
+      controller.abort()
+      return []
+    },
+  }))).rejects.toThrow()
+  expect(fake.prompts).toEqual([])
+  expect(await engine.answer(ask())).toBe("answer 1")
+})
+
+test("a call cancelled before admission creates no Session or provider prompt", async () => {
+  const fake = fakeHost()
+  const engine = NiaGrpc.engine(fake.host)
+  const controller = new AbortController()
+  controller.abort()
+  await expect(engine.answer(ask({ signal: controller.signal }))).rejects.toThrow()
+  expect(fake.created).toEqual([])
+  expect(fake.prompts).toEqual([])
 })
 
 test("rebuilt context keeps at most six exchanges and about 10,000 characters", () => {
