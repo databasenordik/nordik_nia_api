@@ -6,6 +6,8 @@ import { ResearchDatabase } from "@nia/backend/research/database"
 import { ResearchQuery } from "@nia/backend/research/query"
 
 const profile = process.env.OPENCODE_RESEARCH_TEST_PROFILE
+// The lists the restore.sh fixture holds; the oracle's own SQL below reads exactly these.
+const fixtureLists = [49, 91, 93, 94] as const
 // Admin reads are restricted to the explicitly enabled disposable-fixture lane.
 describe.skipIf(!profile || process.env.OPENCODE_RESEARCH_TEST_MUTATIONS !== "true")(
   "independent SQL differential oracle",
@@ -34,7 +36,7 @@ describe.skipIf(!profile || process.env.OPENCODE_RESEARCH_TEST_MUTATIONS !== "tr
         AND (f.id<>94 OR lower(btrim(d.row_data->>'ACCESS')) IN ('true','yes','1'))
       ORDER BY n.source_row_id`,
       )
-      for (const fileID of Research.FileID.literals) {
+      for (const fileID of fixtureLists) {
         names.set(
           fileID,
           rows.filter((row) => row.file_id === fileID).map((row) => row.name),
@@ -49,7 +51,7 @@ describe.skipIf(!profile || process.env.OPENCODE_RESEARCH_TEST_MUTATIONS !== "tr
       await client?.close()
       await connection?.close()
     })
-    const cases = Research.FileID.literals.flatMap((fileID) =>
+    const cases = fixtureLists.flatMap((fileID) =>
       Array.from({ length: 50 }, (_, index) => [fileID, index] as const),
     )
     test.each(cases)("list %i differential case %i", async (fileID, index) => {
@@ -107,7 +109,7 @@ describe.skipIf(!profile || process.env.OPENCODE_RESEARCH_TEST_MUTATIONS !== "tr
         WHERE d.file_id IN(49,91,93,94) AND NOT COALESCE(p.is_delete,false)
           AND (p.id<>94 OR lower(btrim(d.row_data->>'ACCESS')) IN('true','yes','1'))`,
       )
-      for (const fileID of Research.FileID.literals) {
+      for (const fileID of fixtureLists) {
         const source = await connection.snapshot({ database: connection.identity, fileID }, undefined, [
           ...new Set(cells.filter((cell) => cell.file_id === fileID).map((cell) => cell.field)),
         ])

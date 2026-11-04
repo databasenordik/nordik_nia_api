@@ -57,7 +57,7 @@ export type RelativePath = string
 
 export type SessionMetadata = { [x: string]: JsonValue }
 
-export type ResearchFileID = 49 | 91 | 93 | 94
+export type ResearchFileID = number
 
 export type SnapshotID = string
 
@@ -3086,7 +3086,7 @@ export type SessionCreateInput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string } | null
     readonly metadata?: { readonly [x: string]: JsonValue } | null
-    readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+    readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
     readonly permissions?: ReadonlyArray<{
       readonly action: string
       readonly resource: string
@@ -3101,7 +3101,7 @@ export type SessionCreateInput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string } | null
     readonly metadata?: { readonly [x: string]: JsonValue } | null
-    readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+    readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
     readonly permissions?: ReadonlyArray<{
       readonly action: string
       readonly resource: string
@@ -3116,7 +3116,7 @@ export type SessionCreateInput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string } | null
     readonly metadata?: { readonly [x: string]: JsonValue } | null
-    readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+    readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
     readonly permissions?: ReadonlyArray<{
       readonly action: string
       readonly resource: string
@@ -3131,7 +3131,7 @@ export type SessionCreateInput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string } | null
     readonly metadata?: { readonly [x: string]: JsonValue } | null
-    readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+    readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
     readonly permissions?: ReadonlyArray<{
       readonly action: string
       readonly resource: string
@@ -3146,7 +3146,7 @@ export type SessionCreateInput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string } | null
     readonly metadata?: { readonly [x: string]: JsonValue } | null
-    readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+    readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
     readonly permissions?: ReadonlyArray<{
       readonly action: string
       readonly resource: string
@@ -3161,7 +3161,7 @@ export type SessionCreateInput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string } | null
     readonly metadata?: { readonly [x: string]: JsonValue } | null
-    readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+    readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
     readonly permissions?: ReadonlyArray<{
       readonly action: string
       readonly resource: string
@@ -3176,7 +3176,7 @@ export type SessionCreateInput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string } | null
     readonly metadata?: { readonly [x: string]: JsonValue } | null
-    readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+    readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
     readonly permissions?: ReadonlyArray<{
       readonly action: string
       readonly resource: string
@@ -3191,7 +3191,7 @@ export type SessionCreateInput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string } | null
     readonly metadata?: { readonly [x: string]: JsonValue } | null
-    readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+    readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
     readonly permissions?: ReadonlyArray<{
       readonly action: string
       readonly resource: string
@@ -3206,7 +3206,7 @@ export type SessionCreateInput = {
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
     readonly location?: { readonly directory: string } | null
     readonly metadata?: { readonly [x: string]: JsonValue } | null
-    readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+    readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
     readonly permissions?: ReadonlyArray<{
       readonly action: string
       readonly resource: string
@@ -3249,7 +3249,7 @@ export type SessionImportInput = {
       readonly title?: string
       readonly subpath?: string
       readonly metadata?: { readonly [x: string]: JsonValue }
-      readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+      readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
       readonly permissions?: ReadonlyArray<{
         readonly action: string
         readonly resource: string
@@ -3593,7 +3593,7 @@ export type SessionImportInput = {
       readonly title?: string
       readonly subpath?: string
       readonly metadata?: { readonly [x: string]: JsonValue }
-      readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+      readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
       readonly permissions?: ReadonlyArray<{
         readonly action: string
         readonly resource: string
@@ -3937,7 +3937,7 @@ export type SessionImportInput = {
       readonly title?: string
       readonly subpath?: string
       readonly metadata?: { readonly [x: string]: JsonValue }
-      readonly research?: { readonly database: string; readonly fileID: 49 | 91 | 93 | 94; readonly principal?: string }
+      readonly research?: { readonly database: string; readonly fileID: number; readonly principal?: string }
       readonly permissions?: ReadonlyArray<{
         readonly action: string
         readonly resource: string
