@@ -21,7 +21,7 @@ export interface Config {
   readonly baseURL: string
   /** Sent as reasoning_effort; undefined for a model that takes none. */
   readonly effort?: string
-  readonly database: { readonly url: string; readonly ssl: ResearchDatabase.Options["ssl"] }
+  readonly database: { readonly url: string; readonly ssl: ResearchDatabase.Options["ssl"]; readonly max: number }
   /** Settings that were replaced by a default, for the operator to see at startup. */
   readonly warnings: readonly string[]
 }
@@ -58,7 +58,8 @@ export function effort(model: string, requested: unknown): { effort?: string; wa
 }
 
 // The deployment's variables: NIA_TRANSPORT, APP_ENV, NIA_GRPC_PRINCIPAL_ID,
-// NIA_GRPC_CAN_USE_PRIVATE_FILES, REASONING_BASE_URL, REASONING_API_KEY and ASSISTANT_DATABASE_URL,
+// NIA_GRPC_CAN_USE_PRIVATE_FILES, REASONING_BASE_URL, REASONING_API_KEY, ASSISTANT_DATABASE_URL
+// and optional NIA_DB_POOL_MAX (per pool; both conversations and research have a pool),
 // with the model and effort from backend/reasoning.json. Every problem is reported at once, before any
 // connection is opened, and no message repeats a value (the database URL carries a password).
 export function load(env: Readonly<Record<string, string | undefined>>, settings = reasoning): Config {
@@ -76,6 +77,10 @@ export function load(env: Readonly<Record<string, string | undefined>>, settings
   if (!env.REASONING_API_KEY) errors.push("REASONING_API_KEY is required")
   const level = effort(model, settings.effort)
   const database = connection(env.ASSISTANT_DATABASE_URL, errors)
+  const poolText = env.NIA_DB_POOL_MAX?.trim() || "4"
+  const poolMax = Number(poolText)
+  if (!/^[0-9]+$/.test(poolText) || !Number.isSafeInteger(poolMax) || poolMax < 1)
+    errors.push("NIA_DB_POOL_MAX must be a positive safe integer")
   if (errors.length || !database || privateFiles === undefined)
     throw new Error(`invalid configuration: ${errors.join("; ")}`)
   return {
@@ -86,7 +91,7 @@ export function load(env: Readonly<Record<string, string | undefined>>, settings
     model: `${provider}/${model}`,
     baseURL,
     effort: level.effort,
-    database,
+    database: { ...database, max: poolMax },
     warnings: level.warning ? [level.warning] : [],
   }
 }

@@ -10,6 +10,7 @@ export const Options = Schema.Struct({
   principal: Schema.String.check(Schema.isMinLength(1)),
   private: Schema.Boolean,
   ssl: Schema.Literals(["disable", "require", "verify-ca", "verify-full"]),
+  max: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
 })
 export type Options = typeof Options.Type
 
@@ -164,7 +165,7 @@ export async function connect(input: Options) {
     throw new Error("An explicit PostgreSQL profile is required")
   if (input.ssl === "disable" && !local(url)) throw new Error("Remote PostgreSQL connections require TLS")
   // Own the pool in the host scope; never forward this profile into Session environment variables.
-  const client = new SQL({ url: input.url, max: 4, connectionTimeout: 10, idleTimeout: 20, ssl: input.ssl })
+  const client = new SQL({ url: input.url, max: input.max ?? 4, connectionTimeout: 10, idleTimeout: 20, ssl: input.ssl })
   const query = async <A>(
     decode: (value: unknown) => A,
     name: "identity" | "lists" | "catalog" | "snapshot",

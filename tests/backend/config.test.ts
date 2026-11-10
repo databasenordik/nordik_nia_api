@@ -23,7 +23,7 @@ test("the deployment's variables and the committed reasoning.json configure ever
     model: "reasoning/grok-4.6",
     baseURL: "https://reasoning.example/v1",
     effort: "low",
-    database: { url: "postgresql://assistant_runtime:s3cret%402024@34.11.220.37:5432/postgres", ssl: "require" },
+    database: { url: "postgresql://assistant_runtime:s3cret%402024@34.11.220.37:5432/postgres", ssl: "require", max: 4 },
     warnings: [],
   })
   // The client decodes the password and encrypts the connection.
@@ -41,6 +41,20 @@ test("the committed reasoning.json names a model and an effort it accepts", () =
   expect(typeof NiaConfig.reasoning.model).toBe("string")
   expect(config.model).toBe(`reasoning/${NiaConfig.reasoning.model}`)
   expect(config.warnings).toEqual([])
+})
+
+test("the deployment can bound each of its two database pools", () => {
+  expect(NiaConfig.load({ ...deployed, NIA_DB_POOL_MAX: "1" }).database.max).toBe(1)
+  expect(NiaConfig.load({ ...deployed, NIA_DB_POOL_MAX: " 2 " }).database.max).toBe(2)
+  expect(NiaConfig.load({ ...deployed, NIA_DB_POOL_MAX: "" }).database.max).toBe(4)
+})
+
+test("invalid pool limits fail before startup without reflecting their values", () => {
+  for (const value of ["0", "-1", "1.5", "Infinity", "1e2", "private-pool-value", "9007199254740992"]) {
+    expect(() => NiaConfig.load({ ...deployed, NIA_DB_POOL_MAX: value })).toThrow(
+      "NIA_DB_POOL_MAX must be a positive safe integer",
+    )
+  }
 })
 
 test("the model and effort are never read from the environment", () => {
