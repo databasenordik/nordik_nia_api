@@ -90,10 +90,24 @@ jobs:
             --min 0 --min-instances 0 --cpu-throttling \
             --max-instances 20 --cpu 1 --memory 2Gi --port 8080 \
             --timeout 900 "${TRANSPORT_FLAGS[@]}" --quiet
+      - name: Route traffic to the latest revision
+        run: |
+          # Cloud Run preserves traffic pinned by a rollback or a --no-traffic deployment.
+          gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" --to-latest --quiet
       - name: Verify Cloud Run revision readiness
         run: |
           gcloud run services describe "$CLOUD_RUN_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > /tmp/service.json
-          python -c 'import json; s=json.load(open("/tmp/service.json"))["status"]; assert any(c["type"] == "Ready" and c["status"] == "True" for c in s["conditions"]); assert s["latestReadyRevisionName"] == s["latestCreatedRevisionName"]'
+          python - <<'PY'
+          import json
+          with open("/tmp/service.json") as file:
+              status = json.load(file)["status"]
+          print(json.dumps(status, indent=2), flush=True)
+          latest = status.get("latestCreatedRevisionName")
+          assert any(c["type"] == "Ready" and c["status"] == "True" for c in status.get("conditions", [])), "Cloud Run service is not Ready"
+          assert latest and status.get("latestReadyRevisionName") == latest, "Latest created revision is not the latest ready revision"
+          assert sum(t.get("percent", 0) for t in status.get("traffic", []) if t.get("revisionName") == latest) == 100, "Latest revision is not serving 100% of traffic"
+          PY
       - name: Check public health endpoint
         if: env.NIA_TRANSPORT == 'http'
         run: |
