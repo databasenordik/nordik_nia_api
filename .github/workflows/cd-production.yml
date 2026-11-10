@@ -6,6 +6,21 @@ name: CD (TypeScript) Build + Push + Deploy production
 on:
   push:
     branches: [main]
+    paths:
+      - 'backend/**'
+      - 'package.json'
+      - 'bun.lock'
+      - 'bunfig.toml'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/cd-production.yml'
+      - '!backend/**/*.md'
+      - '!backend/**/docs/**'
+      - '!backend/**/*.test.ts'
+      - '!backend/**/*.spec.ts'
+      - '!backend/**/tests/**'
+      # These Markdown files are imported as runtime text by plugin/skill.ts.
+      - 'backend/runtime/core/src/plugin/skill/*.md'
   workflow_dispatch:
 
 concurrency:
