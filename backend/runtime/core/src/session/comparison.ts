@@ -17,7 +17,9 @@ export function captureProviderCalls(sessionID: string, record: (call: ProviderC
 }
 // Start after hooks/preparation; finish only when the provider body ends, errors or is cancelled.
 // Every actual HTTP attempt has its own sample. Tool execution and retry sleep are outside it.
-export function measureProviderHTTP(sessionID: string, model: string, existing?: HttpMiddleware): HttpMiddleware {
+export function measureProviderHTTP(sessionID: string, model: string, existing?: HttpMiddleware): HttpMiddleware | undefined {
+  // Preserve the original transport path when comparison capture is inactive.
+  if (!captures.has(sessionID)) return existing
   return (request, handler) => {
     const measured: typeof handler = (sent) => Effect.gen(function* () {
       const record = captures.get(sessionID)

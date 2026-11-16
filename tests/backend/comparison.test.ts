@@ -13,6 +13,7 @@ test("comparison is opt-in and refuses expired and unbounded windows", () => {
   for (const value of ["", "invalid", "2020-01-01T00:00:00Z", "2099-01-01T00:00:00Z"]) {
     process.env.CHAT_COMPARISON_UNTIL = value
     expect(comparisonEnabled()).toBe(false)
+    expect(measureProviderHTTP("inactive", "model")).toBeUndefined()
   }
 })
 
@@ -31,14 +32,14 @@ test("provider duration includes the response body, excludes tools and isolates 
     }))))
     // Stand-in for retrieval/tool work: must not be counted.
     await Bun.sleep(70)
-    const response = await Effect.runPromise(measureProviderHTTP("a", "model-a")(request, handler))
+    const response = await Effect.runPromise(measureProviderHTTP("a", "model-a")!(request, handler))
     await Effect.runPromise(Stream.runDrain(response.stream))
     expect(a).toHaveLength(1)
     expect(a[0]!.duration_ms).toBeGreaterThanOrEqual(20)
     expect(a[0]!.duration_ms).toBeLessThan(85)
     expect(a[0]!.outcome).toBe("ok")
     expect(b).toHaveLength(0)
-    await Effect.runPromise(measureProviderHTTP("b", "model-b")(request, () => Effect.fail(new Error("offline")))).catch(() => {})
+    await Effect.runPromise(measureProviderHTTP("b", "model-b")!(request, () => Effect.fail(new Error("offline")))).catch(() => {})
     expect(b).toHaveLength(1)
     expect(b[0]!.outcome).toBe("error")
   } finally { releaseA(); releaseB(); Date.now = now }
