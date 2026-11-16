@@ -1,3 +1,4 @@
+import { captureProviderCalls, comparisonEnabled, type ProviderCall } from "@opencode/core/session/comparison"
 export * as NiaGrpc from "./grpc"
 
 import path from "node:path"
@@ -36,6 +37,7 @@ export interface Engine {
     readonly communities: readonly string[]
     readonly question: string
     /** The conversation's recent exchanges, read only when a new Session has to be started. */
+    readonly onProviderCall?: (call: ProviderCall) => void
     readonly history: () => Promise<readonly Exchange[]>
     readonly signal: AbortSignal
   }) => Promise<string>
@@ -73,13 +75,14 @@ export function engine(host: Host, options: { readonly concurrency?: number } = 
             }
             input.signal.throwIfAborted()
             sessions.set(input.conversationID, { id: sessionID, key })
+            const release = captureProviderCalls(sessionID, input.onProviderCall ?? (() => {}))
             try {
               return (await host.prompt(sessionID, question, undefined, input.signal)).text
             } catch (error) {
               // An interrupted or failed Session may still be busy; the next question starts a fresh one.
               sessions.delete(input.conversationID)
               throw error
-            }
+            } finally { release() }
           }),
         )
       queues.set(input.conversationID, run)
@@ -187,7 +190,7 @@ export function handlers(input: {
     return { principal: input.principal, userID: request.user_id, fileID: request.selected_file_id }
   }
 
-  const query = async (request: QueryRequest, signal: AbortSignal) => {
+  const query = async (request: QueryRequest, signal: AbortSignal, requestID = "") => {
     const length = Array.from(request.question).length
     if (length < 1 || length > 4000 || !request.question.trim())
       throw new Conversations.Invalid("question must be 1 to 4000 characters")
@@ -210,6 +213,7 @@ export function handlers(input: {
     const askedAt = new Date()
     const started = performance.now()
     // As in the Python API, a model failure is a reply the user sees and keeps in history, not an error.
+    const providerCalls: ProviderCall[] = []
     let status = "answered"
     let answer: string
     try {
@@ -218,6 +222,7 @@ export function handlers(input: {
         fileID: current.fileID,
         communities,
         question: request.question,
+        onProviderCall: (call) => providerCalls.push(call),
         history: () => input.store.recent(current, conversation.id, communities, 6),
         signal,
       })
@@ -258,11 +263,13 @@ export function handlers(input: {
         model,
         file_id: current.fileID,
         conversation_id: conversation.id,
-        model_ms: modelMs,
+        engine_ms: modelMs,
         total_ms: Math.round(performance.now() - started),
       })}`,
     )
     const result = turnResult({ status, answer, conversationID: conversation.id, exchangeID, fileID: current.fileID, model })
+    const timing = { available: true, measurement: "provider_round_trip", provider_calls: providerCalls, llm_ms: providerCalls.reduce((sum, call) => sum + call.duration_ms, 0), llm_call_count: providerCalls.length }
+    if (comparisonEnabled()) console.log(JSON.stringify({ event: "nia_comparison", engine: "nia", request_id: requestID, question: request.question, answer, failed: status !== "answered", timing }))
     return {
       status,
       answer,
@@ -270,7 +277,7 @@ export function handlers(input: {
       selected_file_id: current.fileID,
       error_code: status === "answered" ? "" : status,
       detail: "",
-      result_json: Buffer.from(JSON.stringify(result)),
+      result_json: Buffer.from(JSON.stringify({ ...result, ...(comparisonEnabled() ? { timing } : {}) })),
       exchange_id: exchangeID,
     }
   }
@@ -285,11 +292,11 @@ export function handlers(input: {
   }
 
   const unary =
-    <Request, Response>(name: string, handler: (request: Request, signal: AbortSignal) => Promise<Response>) =>
+    <Request, Response>(name: string, handler: (request: Request, signal: AbortSignal, requestID?: string) => Promise<Response>) =>
     (call: grpc.ServerUnaryCall<Request, Response>, callback: grpc.sendUnaryData<Response>) => {
       const controller = new AbortController()
       call.on("cancelled", () => controller.abort())
-      handler(call.request, controller.signal).then(
+      handler(call.request, controller.signal, String(call.metadata?.get("x-request-id")[0] ?? "")).then(
         (response) => callback(null, response),
         (error: unknown) => {
           if (error instanceof Conversations.Invalid)
