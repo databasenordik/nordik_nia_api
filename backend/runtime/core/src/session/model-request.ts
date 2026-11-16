@@ -32,6 +32,7 @@ import { PluginHooks } from "../plugin/hooks.js"
 import { QuestionTool } from "../tool/plugin/question.js"
 import { Tool } from "../tool.js"
 import { SessionAffinity } from "./affinity.js"
+import { measureProviderHTTP } from "./comparison.js"
 import { SessionModelTransport } from "./model-transport.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerModel } from "./runner/model.js"
@@ -394,7 +395,7 @@ export const layer = Layer.effect(
       return {
         event: shaped,
         request,
-        options: { ...(http ? { http } : {}), ...(webSocket ? { webSocket } : {}) },
+        options: { http: kind === "title" ? http : measureProviderHTTP(session.id, String(model.ref.modelID), http), ...(webSocket ? { webSocket } : {}) },
         retry: (event: Parameters<Prepared["retry"]>[0]) =>
           hooks.trigger("session", "retry", event).pipe(Effect.asVoid),
         // Permission.assert and the question tool throw declines as defects so tools cannot

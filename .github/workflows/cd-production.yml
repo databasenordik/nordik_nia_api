@@ -86,9 +86,9 @@ jobs:
           fi
           gcloud run deploy "$CLOUD_RUN_SERVICE" \
             --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE_URI" \
-            --ingress all --allow-unauthenticated \
+            --ingress all \
             --min 0 --min-instances 0 --cpu-throttling \
-            --max-instances 20 --cpu 1 --memory 2Gi --port 8080 \
+            --max-instances 1 --cpu 1 --memory 2Gi --port 8080 \
             --timeout 900 "${TRANSPORT_FLAGS[@]}" --quiet
       - name: Route traffic to the latest revision
         run: |
