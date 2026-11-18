@@ -15,6 +15,10 @@ export const make = (connection: ResearchDatabase.Connection) =>
     const store = yield* SessionStore.Service
     const kv = yield* KV.Service
     const currentEvidence = new Map<string, Research.Evidence[]>()
+    // Records already loaded during the current question, keyed by Session. Created when a prompt starts
+    // and dropped when its evidence is taken, so nothing is reused across questions. An empty field list is
+    // the freshness check (fingerprint only) and always goes to the database.
+    const loaded = new Map<string, { columns?: ReadonlySet<string>; snapshot: Research.Snapshot }[]>()
     const binding = Effect.fn("Research.binding")(function* (id: string) {
       const session = yield* store.get(Session.ID.make(id))
       if (
@@ -35,20 +39,33 @@ export const make = (connection: ResearchDatabase.Connection) =>
       const selected = yield* binding(id)
       const limit = yield* communities(id)
       const requested = limit.length && fields ? [...new Set([...fields, "community"])] : fields
-      const current = yield* Effect.tryPromise({
-        try: (signal) => connection.snapshot(selected, signal, requested),
-        catch: () =>
-          new Error("Selected list unavailable, access denied, or current data incomplete; no fallback was used"),
-      })
+      const reusable = fields === undefined || fields.length > 0 ? loaded.get(id) : undefined
+      const wanted = requested && columnsOf(requested)
+      const hit = reusable?.find((entry) => !entry.columns || (wanted !== undefined && [...wanted].every((name) => entry.columns!.has(name))))
+      const current = hit
+        ? project(hit.snapshot, wanted)
+        : yield* Effect.tryPromise({
+            try: (signal) => connection.snapshot(selected, signal, requested),
+            catch: () =>
+              new Error("Selected list unavailable, access denied, or current data incomplete; no fallback was used"),
+          })
+      if (reusable && !hit) reusable.splice(0, reusable.length, { columns: wanted, snapshot: current }, ...reusable.slice(0, 2))
       if (!limit.length) return current
       return withinCommunities(current, limit, !fields || fields.includes("community"))
     })
+    // One catalog read per question instead of one per model step and tool. The final freshness check
+    // still reads the snapshot fingerprint, which includes the catalog, from the database.
+    const catalogs = new Map<string, Research.Dataset>()
     const catalog = Effect.fn("Research.catalog")(function* (id: string) {
+      const cached = catalogs.get(id)
+      if (cached) return cached
       const selected = yield* binding(id)
-      return yield* Effect.tryPromise({
+      const dataset = yield* Effect.tryPromise({
         try: (signal) => connection.catalog(selected.fileID, signal),
         catch: () => new Error("Selected list unavailable or access denied"),
       })
+      if (loaded.has(id)) catalogs.set(id, dataset)
+      return dataset
     })
     const load = Effect.fn("Research.evidence")(function* (sessionID: string, id: string) {
       if (!/^ev_[0-9a-f-]{36}$/.test(id)) return yield* Effect.fail(new Error("Invalid evidence identity"))
@@ -138,10 +155,16 @@ export const make = (connection: ResearchDatabase.Connection) =>
       load,
       run,
       answer,
-      beginEvidence: (sessionID: string) => currentEvidence.set(sessionID, []),
+      beginEvidence: (sessionID: string) => {
+        currentEvidence.set(sessionID, [])
+        loaded.set(sessionID, [])
+        catalogs.delete(sessionID)
+      },
       takeEvidence: (sessionID: string) => {
         const evidence = currentEvidence.get(sessionID) ?? []
         currentEvidence.delete(sessionID)
+        loaded.delete(sessionID)
+        catalogs.delete(sessionID)
         return evidence
       },
       frame: (sessionID: string) => kv.get(`research/${sessionID}/frame`),
@@ -185,6 +208,26 @@ export function withinCommunities(
       if (keepField) return [record]
       return [{ ...record, values: Object.fromEntries(Object.entries(record.values).filter(([field]) => field !== "community")) }]
     }),
+  }
+}
+
+/** The columns connection.snapshot asks the database for: each date component also loads its parent date. */
+function columnsOf(fields: readonly string[]) {
+  return new Set(fields.flatMap((field) => {
+    const match = /^(.*_date)_(year|month|day)$/.exec(field)
+    return match ? [field, match[1]] : [field]
+  }))
+}
+
+/** A loaded snapshot cut down to what a fresh call for `columns` returns; undefined columns means every field. */
+function project(snapshot: Research.Snapshot, columns: ReadonlySet<string> | undefined): Research.Snapshot {
+  if (!columns) return snapshot
+  return {
+    ...snapshot,
+    records: snapshot.records.map((record) => ({
+      ...record,
+      values: Object.fromEntries(Object.entries(record.values).filter(([field]) => columns.has(field))),
+    })),
   }
 }
 

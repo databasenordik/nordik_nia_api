@@ -25,7 +25,7 @@ export async function start(config: NiaConfig.Config) {
           [model]: {
             capabilities: { tools: true },
             ...(config.effort ? { settings: { reasoningEffort: config.effort } } : {}),
-            limit: { context: 32000, output: 4096 },
+            limit: { context: 128000, output: 4096 },
           },
         },
       },

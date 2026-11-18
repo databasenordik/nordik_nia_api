@@ -107,11 +107,28 @@ BEGIN
                 WHERE COALESCE(r.row_data_normalized #>> ARRAY['fields',k.key,'raw'],
                          r.row_data_normalized #>> ARRAY['fields',f.normalized_keys[k.ordinal::integer],'raw']) IS NOT NULL
                 ORDER BY k.ordinal LIMIT 1),
-             assistant_api._field_display_at_path(r.row_data_normalized,r.canonical_name,r.canonical_community,r.canonical_school,f.canonical_json_path))
-           ELSE assistant_api._field_display_at_path(r.row_data_normalized,r.canonical_name,r.canonical_community,r.canonical_school,f.canonical_json_path) END)
-    FROM projected_fields f
+             (CASE WHEN f.canonical_json_path IS NULL THEN NULL ELSE COALESCE(NULLIF(btrim(CASE jsonb_typeof(x.v)
+             WHEN 'object' THEN COALESCE(NULLIF(x.v->>'iso',''),NULLIF(x.v->>'raw',''),NULLIF(x.v->>'display',''),NULLIF(x.v->>'value',''),NULLIF(x.v->>'year',''),NULLIF(x.v->>'normalized',''))
+             WHEN 'array' THEN NULLIF((SELECT string_agg(e.value,', ' ORDER BY e.ordinal) FROM jsonb_array_elements_text(x.v) WITH ORDINALITY AS e(value,ordinal)),'')
+             WHEN 'null' THEN NULL
+             ELSE NULLIF(x.v #>> '{}','') END),''),
+           CASE f.canonical_json_path WHEN 'canonical.name' THEN NULLIF(btrim(r.canonical_name),'') WHEN 'canonical.display_name' THEN NULLIF(btrim(r.canonical_name),'')
+             WHEN 'canonical.community' THEN NULLIF(btrim(r.canonical_community),'') WHEN 'canonical.school' THEN NULLIF(btrim(r.canonical_school),'') ELSE NULL END) END))
+           ELSE (CASE WHEN f.canonical_json_path IS NULL THEN NULL ELSE COALESCE(NULLIF(btrim(CASE jsonb_typeof(x.v)
+             WHEN 'object' THEN COALESCE(NULLIF(x.v->>'iso',''),NULLIF(x.v->>'raw',''),NULLIF(x.v->>'display',''),NULLIF(x.v->>'value',''),NULLIF(x.v->>'year',''),NULLIF(x.v->>'normalized',''))
+             WHEN 'array' THEN NULLIF((SELECT string_agg(e.value,', ' ORDER BY e.ordinal) FROM jsonb_array_elements_text(x.v) WITH ORDINALITY AS e(value,ordinal)),'')
+             WHEN 'null' THEN NULL
+             ELSE NULLIF(x.v #>> '{}','') END),''),
+           CASE f.canonical_json_path WHEN 'canonical.name' THEN NULLIF(btrim(r.canonical_name),'') WHEN 'canonical.display_name' THEN NULLIF(btrim(r.canonical_name),'')
+             WHEN 'canonical.community' THEN NULLIF(btrim(r.canonical_community),'') WHEN 'canonical.school' THEN NULLIF(btrim(r.canonical_school),'') ELSE NULL END) END) END)
+    FROM projected_fields f CROSS JOIN LATERAL (SELECT r.row_data_normalized #> f.raw_path AS v) x
   ),'{}'::jsonb) END) ORDER BY r.source_row_id), '[]'::jsonb)
-  INTO records FROM assistant_api.v_current_records r WHERE r.file_id=p_file_id;
+  -- Decompress each stored row once. Referencing the compressed column per projected field
+  -- re-inflated the whole document for every field of every row. OFFSET 0 keeps this subquery
+  -- from being flattened, which would copy the expression back into every reference.
+  INTO records FROM (SELECT v.source_row_id, v.row_data_normalized #> '{}' AS row_data_normalized,
+      v.canonical_name, v.canonical_community, v.canonical_school
+    FROM assistant_api.v_current_records v WHERE v.file_id=p_file_id OFFSET 0) r;
   IF octet_length(records::text)>33554432 THEN RAISE EXCEPTION 'List exceeds the qualified byte budget' USING ERRCODE='54000'; END IF;
   -- Include field/permission policy, same-version edits and source membership; no cross-question result cache.
   SELECT md5(COALESCE(string_agg(r.source_row_id::text || ':' || r.row_data_normalized::text || ':' || r.source_updated_at::text,'|' ORDER BY r.source_row_id),'')
