@@ -175,9 +175,8 @@ export async function connect(input: Options) {
   ) => {
     return client
       .begin("READ ONLY ISOLATION LEVEL REPEATABLE READ", async (tx) => {
-        await tx`SET LOCAL statement_timeout='10000ms'`
-        await tx`SET LOCAL lock_timeout='500ms'`
-        await tx`SET LOCAL idle_in_transaction_session_timeout='12000ms'`
+        // The three transaction-local limits in one round trip instead of three.
+        await tx`SELECT set_config('statement_timeout','10000ms',true), set_config('lock_timeout','500ms',true), set_config('idle_in_transaction_session_timeout','12000ms',true)`
         const pending =
           name === "identity"
             ? tx`SELECT research_api.identity() AS value`

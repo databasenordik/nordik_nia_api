@@ -239,11 +239,12 @@ export function make(state: ResearchState.Interface, allowedProviders: readonly 
         .pipe(Effect.orDie)
       yield* ctx.session.hook("prompt", (event) =>
         Effect.gen(function* () {
+          // Start the question first so its catalog read is cached for the rest of the question.
+          state.beginEvidence(event.sessionID)
           yield* state.catalog(event.sessionID).pipe(Effect.orDie)
           if (event.prompt.files?.length || event.prompt.agents?.length || event.prompt.skills?.length)
             return yield* Effect.die(new Error("Research Sessions accept text questions only"))
           yield* state.clearAnswer(event.sessionID)
-          state.beginEvidence(event.sessionID)
         }),
       )
       yield* ctx.session.hook("context", (event) =>
