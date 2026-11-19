@@ -177,14 +177,14 @@ const toJsonSchema = (schema: Schema.Top): JsonSchema.JsonSchema => {
   // without changing validation: `{ type: "integer", allOf: [{ minimum: 0 }] }` becomes
   // `{ type: "integer", minimum: 0 }` only when no keyword would be overwritten. Named schemas
   // emit `$ref` plus root `$defs`; inline acyclic local references so providers receive the full
-  // nested schema directly, then remove unused `$defs`. Recursive references stay intact because
+  // nested schema directly, then remove `$defs` entries nothing references any more. Recursive references stay intact because
   // expanding them would never terminate.
   const normalized = flattenAllOf(
     Object.keys(document.definitions).length === 0
       ? document.schema
       : { ...document.schema, $defs: document.definitions },
   )
-  return dropDefinitionsIfResolved(inlineLocalReferences(normalized)) as JsonSchema.JsonSchema
+  return dropUnusedDefinitions(inlineLocalReferences(normalized)) as JsonSchema.JsonSchema
 }
 
 const flattenAllOf = (value: unknown): unknown => {
@@ -245,17 +245,30 @@ const inlineLocalReferences = (
 const canMergeRecords = (left: Record<string, unknown>, right: Record<string, unknown>) =>
   Object.keys(left).every((key) => !(key in right))
 
-const dropDefinitionsIfResolved = (value: unknown): unknown => {
-  if (!isRecord(value) || hasLocalReference(value)) return value
-  const { $defs: _, ...rest } = value
-  return rest
+// Keep only the definitions still reachable from the root schema. A named root schema stays in
+// `$defs` after being inlined at the root; sending it again would duplicate the whole schema.
+const dropUnusedDefinitions = (value: unknown): unknown => {
+  if (!isRecord(value) || !isRecord(value.$defs)) return value
+  const { $defs: definitions, ...rest } = value
+  const used = new Set<string>()
+  const visit = (node: unknown) => {
+    for (const name of localReferences(node))
+      if (!used.has(name) && name in definitions) {
+        used.add(name)
+        visit(definitions[name])
+      }
+  }
+  visit(rest)
+  if (used.size === 0) return rest
+  return { ...rest, $defs: Object.fromEntries(Object.entries(definitions).filter(([name]) => used.has(name))) }
 }
 
-const hasLocalReference = (value: unknown): boolean => {
-  if (Array.isArray(value)) return value.some(hasLocalReference)
-  if (!isRecord(value)) return false
-  if (typeof value.$ref === "string" && value.$ref.startsWith("#/$defs/")) return true
-  return Object.values(value).some(hasLocalReference)
+const localReferences = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.flatMap(localReferences)
+  if (!isRecord(value)) return []
+  const own = typeof value.$ref === "string" ? JsonPointer.parseUriFragment(value.$ref) : undefined
+  const name = own?.length === 2 && own[0] === "$defs" ? [own[1]] : []
+  return [...name, ...Object.entries(value).flatMap(([key, item]) => (key === "$ref" ? [] : localReferences(item)))]
 }
 
 export const normalizeContent = (value: string | ReadonlyArray<Tool.Content> | undefined, output?: unknown) => {
