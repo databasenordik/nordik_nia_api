@@ -203,6 +203,10 @@ export async function connect(input: Options) {
         throw new Error("Research database request failed; verify availability, permissions and current normalization")
       })
   }
+  // One message checks the catalog several times within a second or two (request validation, Session
+  // checks, question start, delivery). Reuse a read briefly instead of asking the database each time.
+  // The shared read runs without any one caller's signal, so one caller giving up never fails another.
+  const catalogs = reuseFor(CATALOG_REUSE_MS, (fileID: Research.FileID) => query(decodeDataset, "catalog", fileID))
   const close = () => client.close()
   let phase = "gateway identity"
   const initialize = async () => {
@@ -220,7 +224,10 @@ export async function connect(input: Options) {
       identity: identity.database,
       principal: input.principal,
       lists: (signal?: AbortSignal) => query(decodeLists, "lists", undefined, signal),
-      catalog: (fileID: Research.FileID, signal?: AbortSignal) => query(decodeDataset, "catalog", fileID, signal),
+      catalog: (fileID: Research.FileID, signal?: AbortSignal) => {
+        signal?.throwIfAborted()
+        return abortable(catalogs(fileID), signal)
+      },
       snapshot: async (binding: Research.Binding, signal?: AbortSignal, fields?: readonly string[]) => {
         if (binding.database !== identity.database) throw new Error("Session belongs to a different database")
         const columns = fields?.flatMap((field) => {
@@ -246,6 +253,39 @@ export async function connect(input: Options) {
 }
 
 class SelfTestError extends Error {}
+
+/**
+ * How long a catalog read is reused. Data reads (snapshots) are never reused, so records, access and the
+ * delivery freshness check always come from the database; only a catalog change (a republish or revoked
+ * access) can take up to this long to be seen by the catalog checks.
+ */
+export const CATALOG_REUSE_MS = 3_000
+
+/** Reuses a successful read per key for `ttl` ms. Concurrent callers share one request; failures are never kept. */
+export function reuseFor<K, A>(ttl: number, read: (key: K) => Promise<A>, now = () => performance.now()) {
+  const kept = new Map<K, { readonly at: number; readonly value: Promise<A> }>()
+  return (key: K): Promise<A> => {
+    const hit = kept.get(key)
+    if (hit && now() - hit.at < ttl) return hit.value
+    const value = read(key)
+    kept.set(key, { at: now(), value })
+    value.catch(() => {
+      if (kept.get(key)?.value === value) kept.delete(key)
+    })
+    return value
+  }
+}
+
+/** The shared promise, but rejected for this caller alone when its own signal aborts. */
+export function abortable<A>(value: Promise<A>, signal?: AbortSignal): Promise<A> {
+  if (!signal) return value
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise<A>((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    value.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
+  })
+}
 
 export type Connection = Awaited<ReturnType<typeof connect>>
 

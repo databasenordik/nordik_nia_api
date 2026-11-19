@@ -21,6 +21,20 @@ import { SessionRestart } from "@opencode/core/session/execution/restart"
 import { Bus } from "@opencode/core/bus"
 import { EmbeddedHost } from "@opencode/sdk/embedded"
 
+/**
+ * Whether every cited evidence item still matches the list's current publication. A reply that cites
+ * nothing (a greeting, a clarifying question, a refusal) has nothing to go stale, so the database is
+ * not read for it.
+ */
+export async function deliverable(
+  cited: readonly Pick<Research.Evidence, "fingerprint" | "version">[],
+  current: () => Promise<{ readonly fingerprint: string; readonly dataset: { readonly version: number } }>,
+) {
+  if (!cited.length) return true
+  const snapshot = await current()
+  return cited.every((item) => item.fingerprint === snapshot.fingerprint && item.version === snapshot.dataset.version)
+}
+
 export interface Options {
   readonly directory: string
   readonly database: ResearchDatabase.Options
@@ -274,10 +288,8 @@ export async function create(options: Options) {
             const spoken = ResearchResponse.text(messages)
             const currentEvidence = state.takeEvidence(sessionID)
             const evidence = answer?.evidence.length ? answer.evidence : currentEvidence
-            const snapshot = await host.runtime.runPromise(state.snapshot(sessionID, []))
-            const fresh = [...currentEvidence, ...(answer?.evidence ?? [])].every(
-              (item) => item.fingerprint === snapshot.fingerprint && item.version === snapshot.dataset.version,
-            )
+            const cited = [...currentEvidence, ...(answer?.evidence ?? [])]
+            const fresh = await deliverable(cited, () => host.runtime.runPromise(state.snapshot(sessionID, [])))
             progress?.({ type: "finished" })
             if (evidence.length && !fresh)
               throw new Error("The selected list changed before delivery; ask again for a fresh answer")
