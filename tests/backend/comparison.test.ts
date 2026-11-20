@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { Effect, Stream } from "effect"
 import { HttpClientRequest, HttpClientResponse } from "effect/http"
-import { captureProviderCalls, comparisonEnabled, measureProviderHTTP, type ProviderCall } from "@opencode/core/session/comparison"
+import { captureProviderCalls, measureProviderHTTP, type ProviderCall } from "@opencode/core/session/comparison"
 
 const original = process.env.CHAT_COMPARISON_UNTIL
 afterEach(() => {
@@ -9,19 +9,28 @@ afterEach(() => {
   else process.env.CHAT_COMPARISON_UNTIL = original
 })
 
-test("comparison is opt-in and refuses expired and unbounded windows", () => {
-  for (const value of ["", "invalid", "2020-01-01T00:00:00Z", "2099-01-01T00:00:00Z"]) {
-    process.env.CHAT_COMPARISON_UNTIL = value
-    expect(comparisonEnabled()).toBe(false)
-    expect(measureProviderHTTP("inactive", "model")).toBeUndefined()
+test("provider capture works without a comparison window or after its expiry", async () => {
+  for (const value of [undefined, "", "invalid", "2026-11-18T05:00:00Z"]) {
+    if (value === undefined) delete process.env.CHAT_COMPARISON_UNTIL
+    else process.env.CHAT_COMPARISON_UNTIL = value
+    const calls: ProviderCall[] = []
+    const release = captureProviderCalls("permanent", call => calls.push(call))
+    try {
+      expect(() => captureProviderCalls("permanent", () => {})).toThrow("Provider capture already active")
+      const request = HttpClientRequest.post("https://provider.invalid")
+      const response = await Effect.runPromise(measureProviderHTTP("permanent", "model")!(request, sent =>
+        Effect.succeed(HttpClientResponse.fromWeb(sent, new Response("answer"))),
+      ))
+      await Effect.runPromise(Stream.runDrain(response.stream))
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ model: "model", outcome: "ok" })
+    } finally { release() }
+    expect(measureProviderHTTP("permanent", "model")).toBeUndefined()
   }
+  expect(measureProviderHTTP("inactive", "model")).toBeUndefined()
 })
 
 test("provider duration includes the response body, excludes tools and isolates sessions", async () => {
-  // Freeze only the gate clock; provider timings use the independent monotonic performance clock.
-  const now = Date.now
-  Date.now = () => Date.parse("2026-11-16T12:00:00Z")
-  process.env.CHAT_COMPARISON_UNTIL = "2026-11-18T05:00:00Z"
   const a: ProviderCall[] = [], b: ProviderCall[] = []
   const releaseA = captureProviderCalls("a", call => a.push(call))
   const releaseB = captureProviderCalls("b", call => b.push(call))
@@ -42,5 +51,5 @@ test("provider duration includes the response body, excludes tools and isolates 
     await Effect.runPromise(measureProviderHTTP("b", "model-b")!(request, () => Effect.fail(new Error("offline")))).catch(() => {})
     expect(b).toHaveLength(1)
     expect(b[0]!.outcome).toBe("error")
-  } finally { releaseA(); releaseB(); Date.now = now }
+  } finally { releaseA(); releaseB() }
 })

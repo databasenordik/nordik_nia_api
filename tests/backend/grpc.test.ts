@@ -20,6 +20,7 @@ const engine: NiaGrpc.Engine = {
   answer: async (input) => {
     asked.push(input)
     contexts.push(await input.history())
+    input.onProviderCall?.({ model: "grok-4.6", duration_ms: 12.5, outcome: failure ? "error" : "ok" })
     if (failure) throw failure
     return `Answer to ${input.question}`
   },
@@ -86,9 +87,39 @@ test("Query answers and returns the Python API's response, with the same result 
     "evidence", "methods_run", "parallel_step_peak", "critical_path_ms", "conversation_id", "exchange_id",
     "selected_file_id", "suggested_file_id", "error_code", "citations", "inference", "spoken_text", "trace",
     "debug_trace", "planner_attempts", "planner_retry_count", "review_attempts", "review_status",
-    "planner_total_model_calls", "planner_failure_stage", "planner_provider", "planner_model", "planner_usage",
+    "planner_total_model_calls", "planner_failure_stage", "planner_provider", "planner_model", "planner_usage", "timing",
   ])
   expect(body).toMatchObject({ conversation_id: response.conversation_id, exchange_id: response.exchange_id, answer: response.answer })
+})
+
+test("question, answer and provider timing are always logged and returned after comparison expiry", async () => {
+  const original = process.env.CHAT_COMPARISON_UNTIL
+  const log = console.log
+  const events: { event?: string; question?: string; answer?: string; failed?: boolean; timing?: unknown }[] = []
+  console.log = (...args: unknown[]) => {
+    if (typeof args[0] === "string" && args[0].startsWith("{")) events.push(JSON.parse(args[0]))
+  }
+  try {
+    for (const value of [undefined, "2026-11-18T05:00:00Z"]) {
+      if (value === undefined) delete process.env.CHAT_COMPARISON_UNTIL
+      else process.env.CHAT_COMPARISON_UNTIL = value
+      for (const fails of [false, true]) {
+        failure = fails ? new Error("provider unavailable") : undefined
+        const response = await call("Query", query)
+        const timing = {
+          available: true, measurement: "provider_round_trip", llm_ms: 12.5, llm_call_count: 1,
+          provider_calls: [{ model: "grok-4.6", duration_ms: 12.5, outcome: fails ? "error" : "ok" }],
+        }
+        expect(result(response).timing).toEqual(timing)
+        expect(events.at(-1)).toMatchObject({ event: "nia_comparison", engine: "nia", question: query.question, answer: response.answer, failed: fails, timing })
+      }
+    }
+    expect(events.filter(event => event.event === "nia_comparison")).toHaveLength(4)
+  } finally {
+    console.log = log
+    if (original === undefined) delete process.env.CHAT_COMPARISON_UNTIL
+    else process.env.CHAT_COMPARISON_UNTIL = original
+  }
 })
 
 test("a user's questions on one list continue one conversation", async () => {

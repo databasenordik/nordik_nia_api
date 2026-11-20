@@ -1,16 +1,11 @@
-// Temporary, request-scoped provider measurements; remove after November 17.
+// Permanent, request-scoped provider measurements.
 import { Effect, Stream } from "effect"
 import { HttpClientResponse } from "effect/http"
 import type { HttpMiddleware } from "@opencode/ai/route"
 
 export interface ProviderCall { model: string; duration_ms: number; outcome: string }
 const captures = new Map<string, (call: ProviderCall) => void>()
-export function comparisonEnabled() {
-  const until = Date.parse(process.env.CHAT_COMPARISON_UNTIL ?? "")
-  return Number.isFinite(until) && until <= Date.parse("2026-11-18T05:00:00Z") && Date.now() < until
-}
 export function captureProviderCalls(sessionID: string, record: (call: ProviderCall) => void) {
-  if (!comparisonEnabled()) return () => {}
   if (captures.has(sessionID)) throw new Error("Provider capture already active for session")
   captures.set(sessionID, record)
   return () => { captures.delete(sessionID) }
