@@ -1,4 +1,4 @@
-import { captureProviderCalls, comparisonEnabled, type ProviderCall } from "@opencode/core/session/comparison"
+import { captureProviderCalls, type ProviderCall } from "@opencode/core/session/comparison"
 export * as NiaGrpc from "./grpc"
 
 import path from "node:path"
@@ -269,7 +269,7 @@ export function handlers(input: {
     )
     const result = turnResult({ status, answer, conversationID: conversation.id, exchangeID, fileID: current.fileID, model })
     const timing = { available: true, measurement: "provider_round_trip", provider_calls: providerCalls, llm_ms: providerCalls.reduce((sum, call) => sum + call.duration_ms, 0), llm_call_count: providerCalls.length }
-    if (comparisonEnabled()) console.log(JSON.stringify({ event: "nia_comparison", engine: "nia", request_id: requestID, question: request.question, answer, failed: status !== "answered", timing }))
+    console.log(JSON.stringify({ event: "nia_comparison", engine: "nia", request_id: requestID, question: request.question, answer, failed: status !== "answered", timing }))
     return {
       status,
       answer,
@@ -277,7 +277,7 @@ export function handlers(input: {
       selected_file_id: current.fileID,
       error_code: status === "answered" ? "" : status,
       detail: "",
-      result_json: Buffer.from(JSON.stringify({ ...result, ...(comparisonEnabled() ? { timing } : {}) })),
+      result_json: Buffer.from(JSON.stringify({ ...result, timing })),
       exchange_id: exchangeID,
     }
   }
