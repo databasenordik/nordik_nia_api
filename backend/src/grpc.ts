@@ -7,9 +7,11 @@ import * as loader from "@grpc/proto-loader"
 import { NiaConfig } from "./config"
 import { Conversations } from "./conversations"
 import type { ResearchHost } from "./host"
+import { NiaSpeech } from "./speech"
 
 // nordik.nia.v1.Assistant, the contract the Nordik Drive Go adapter calls. backend/proto/nia.proto is
 // a copy of nordik_nia_api's proto/nia.proto (itself mirrored in nordikdriveapi); keep them equal.
+// Speak and Transcribe are additions that start here: the other copies need them before Go can call them.
 // Field names stay as declared and int64 values arrive as numbers.
 const definition = loader.loadSync(path.join(import.meta.dirname, "../proto/nia.proto"), {
   keepCase: true,
@@ -129,6 +131,14 @@ type QueryRequest = {
   user_id: number
 }
 type HistoryRequest = { user_id: number; selected_file_id: number; conversation_id: string; limit: number }
+type SpeakRequest = { text: string; user_id: number }
+type TranscribeRequest = { audio: Buffer; mime_type: string; user_id: number }
+
+const speechStatus: Record<NiaSpeech.Reason, grpc.status> = {
+  invalid: grpc.status.INVALID_ARGUMENT,
+  rate_limited: grpc.status.RESOURCE_EXHAUSTED,
+  unavailable: grpc.status.UNAVAILABLE,
+}
 
 // The Python API's TurnResult serialization, with the keys its planner fills left empty.
 function turnResult(input: {
@@ -180,6 +190,7 @@ function turnResult(input: {
 export function handlers(input: {
   readonly store: Conversations.Store
   readonly engine: Engine
+  readonly speech: NiaSpeech.Speech
   readonly principal: string
   /** The model from backend/reasoning.json, reported in each result. */
   readonly model: string
@@ -291,6 +302,20 @@ export function handlers(input: {
     return { result_json: Buffer.from(JSON.stringify(result)) }
   }
 
+  // Speech touches no list and no conversation; like the other RPCs it is asked for on a user's behalf.
+  const requireUser = (request: { user_id: number }) => {
+    if (!(request.user_id > 0)) throw new Conversations.Invalid("user_id must be positive")
+  }
+  const speak = async (request: SpeakRequest, signal: AbortSignal) => {
+    requireUser(request)
+    const { data, mime } = await input.speech.speak(request.text, signal)
+    return { audio: Buffer.from(data.buffer, data.byteOffset, data.byteLength), mime_type: mime }
+  }
+  const transcribe = async (request: TranscribeRequest, signal: AbortSignal) => {
+    requireUser(request)
+    return { text: await input.speech.transcribe(request.audio, request.mime_type, signal) }
+  }
+
   const unary =
     <Request, Response>(name: string, handler: (request: Request, signal: AbortSignal, requestID?: string) => Promise<Response>) =>
     (call: grpc.ServerUnaryCall<Request, Response>, callback: grpc.sendUnaryData<Response>) => {
@@ -303,6 +328,8 @@ export function handlers(input: {
             return callback({ code: grpc.status.INVALID_ARGUMENT, details: error.message })
           if (error instanceof Conversations.NotFound)
             return callback({ code: grpc.status.NOT_FOUND, details: "conversation not found" })
+          if (error instanceof NiaSpeech.Failure)
+            return callback({ code: speechStatus[error.reason], details: error.message })
           if (controller.signal.aborted) return callback({ code: grpc.status.CANCELLED, details: "cancelled" })
           console.error(`NIA gRPC ${name.toLowerCase()} failed`, error)
           callback({ code: grpc.status.INTERNAL, details: `NIA ${name.toLowerCase()} failed` })
@@ -314,18 +341,22 @@ export function handlers(input: {
     Health: unary("Health", async () => ({ status: "ok" })),
     Query: unary("Query", query),
     History: unary("History", history),
+    Speak: unary("Speak", speak),
+    Transcribe: unary("Transcribe", transcribe),
   }
 }
 
 export async function serve(input: {
   readonly store: Conversations.Store
   readonly engine: Engine
+  readonly speech: NiaSpeech.Speech
   readonly principal: string
   readonly model: string
   readonly hostname: string
   readonly port: number
 }) {
-  const server = new grpc.Server()
+  // gRPC's 4 MiB default would refuse recordings the 20 MiB audio limit allows.
+  const server = new grpc.Server({ "grpc.max_receive_message_length": NiaSpeech.maxAudioBytes + 1024 * 1024 })
   server.addService(Assistant.service, handlers(input))
   const port = await new Promise<number>((resolve, reject) =>
     server.bindAsync(`${input.hostname}:${input.port}`, grpc.ServerCredentials.createInsecure(), (error, bound) =>

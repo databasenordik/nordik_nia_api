@@ -5,6 +5,14 @@ import { randomBytes } from "node:crypto"
 import type { NiaConfig } from "./config"
 import type { NiaEngine } from "./engine"
 import { HttpSession } from "./http-session"
+import { NiaSpeech } from "./speech"
+
+const speechStatus: Record<NiaSpeech.Reason, number> = { invalid: 400, rate_limited: 429, unavailable: 503 }
+// Room for the longest text with every character escaped, and for the largest recording with its form.
+const maxTextBody = 256 * 1024
+const maxAudioBody = NiaSpeech.maxAudioBytes + 1024 * 1024
+// Bun closes a connection after 10 idle seconds; synthesis and transcription send nothing until done.
+const speechIdleSeconds = NiaSpeech.timeoutMs / 1000 + 10
 
 type Chat = {
   id: string
@@ -21,6 +29,7 @@ export function serve(input: {
   readonly config: NiaConfig.Config
   readonly auth: HttpSession.Config
   readonly engine: NiaEngine.Engine
+  readonly speech: NiaSpeech.Speech
   readonly hostname: string
   readonly port: number
 }) {
@@ -98,10 +107,32 @@ export function serve(input: {
     }
   }
 
+  // nordikdriveapi's /api/chat contract: errors are `{ error }`, and speech is the audio's own bytes.
+  async function speak(request: Request) {
+    const bytes = await readBody(request, maxTextBody)
+    if (!bytes) return json(request, { error: "request is too large" }, 413)
+    const text = await spokenText(bytes, request.headers.get("content-type") ?? "")
+    if (!text) return json(request, { error: "text is required" }, 400)
+    const { data, mime } = await input.speech.speak(text, request.signal)
+    return new Response(data, { headers: { "Content-Type": mime, "Cache-Control": "no-store", ...cors(request) } })
+  }
+
+  // Returns the words only; the caller sends them to /api/assistant/query like a typed question.
+  async function transcribe(request: Request) {
+    const bytes = await readBody(request, maxAudioBody)
+    if (!bytes) return json(request, { error: "audio must be between 1 byte and 20 MiB" }, 413)
+    const form = await formOf(bytes, request.headers.get("content-type") ?? "")
+    const audio = form?.get("audio")
+    if (!audio || typeof audio === "string") return json(request, { error: "audio is required" }, 400)
+    // Bun takes audio.type from the file's extension, so it can be empty; the provider reads the bytes.
+    const text = await input.speech.transcribe(new Uint8Array(await audio.arrayBuffer()), audio.type, request.signal)
+    return json(request, { text })
+  }
+
   return Bun.serve({
     hostname: input.hostname,
     port: input.port,
-    async fetch(request) {
+    async fetch(request, server) {
       const url = new URL(request.url)
       if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(request) })
       if (request.method === "GET" && url.pathname === "/health") return json(request, { status: "ok" })
@@ -127,6 +158,21 @@ export function serve(input: {
 
       const user = principal(request)
       if (!user) return json(request, { detail: "unauthorized" }, 401)
+
+      const voice =
+        url.pathname === "/api/chat/tts" ? speak : url.pathname === "/api/chat/transcribe" ? transcribe : undefined
+      if (voice && request.method === "POST") {
+        server.timeout(request, speechIdleSeconds)
+        try {
+          return await voice(request)
+        } catch (error) {
+          // The caller has gone, so nobody reads this response.
+          if (request.signal.aborted) return new Response(null, { status: 499 })
+          if (error instanceof NiaSpeech.Failure) return json(request, { error: error.message }, speechStatus[error.reason])
+          console.error("speech request failed", error)
+          return json(request, { error: "speech failed" }, 500)
+        }
+      }
 
       if (request.method === "GET" && url.pathname === "/api/assistant/datasets") return json(request, await datasets())
 
@@ -313,4 +359,44 @@ export function serve(input: {
       return json(request, { detail: "not found" }, 404)
     },
   })
+}
+
+/** The request's body, or undefined as soon as it passes `limit`, however it was sent. */
+async function readBody(request: Request, limit: number) {
+  if (Number(request.headers.get("content-length")) > limit) return undefined
+  const chunks: Uint8Array[] = []
+  let size = 0
+  const reader = request.body?.getReader()
+  while (reader) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > limit) {
+      await reader.cancel()
+      return undefined
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks)
+}
+
+async function formOf(bytes: Buffer<ArrayBuffer>, type: string) {
+  if (!/^(multipart\/form-data|application\/x-www-form-urlencoded)/i.test(type)) return undefined
+  return new Response(bytes, { headers: { "Content-Type": type } }).formData().catch(() => undefined)
+}
+
+/** `text`, else `answer`, from a form or a JSON body, as the Go API read them. */
+async function spokenText(bytes: Buffer<ArrayBuffer>, type: string) {
+  const form = await formOf(bytes, type)
+  let body: { text?: unknown; answer?: unknown } | null = null
+  if (form) body = { text: form.get("text"), answer: form.get("answer") }
+  else {
+    try {
+      body = JSON.parse(bytes.toString("utf8"))
+    } catch {
+      return ""
+    }
+  }
+  const field = (value: unknown) => (typeof value === "string" ? value.trim() : "")
+  return field(body?.text) || field(body?.answer)
 }

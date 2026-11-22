@@ -6,6 +6,10 @@ service Assistant {
   rpc Query(QueryRequest) returns (QueryResponse);
   rpc Health(HealthRequest) returns (HealthResponse);
   rpc History(HistoryRequest) returns (HistoryResponse);
+  // Reads text aloud. A long answer exceeds a Go client's default 4 MiB receive limit; raise it for this call.
+  rpc Speak(SpeakRequest) returns (SpeakResponse);
+  // Returns what a recording says, without answering it. Audio may be up to 20 MiB.
+  rpc Transcribe(TranscribeRequest) returns (TranscribeResponse);
 }
 
 message QueryRequest {
@@ -39,3 +43,19 @@ message HistoryRequest {
 }
 
 message HistoryResponse { bytes result_json = 1; }
+
+message SpeakRequest {
+  string text = 1;
+  int64 user_id = 2;
+}
+message SpeakResponse {
+  bytes audio = 1;
+  string mime_type = 2;
+}
+
+message TranscribeRequest {
+  bytes audio = 1;
+  string mime_type = 2;
+  int64 user_id = 3;
+}
+message TranscribeResponse { string text = 1; }

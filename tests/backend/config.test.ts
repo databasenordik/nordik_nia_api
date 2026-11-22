@@ -23,6 +23,7 @@ test("the deployment's variables and the committed reasoning.json configure ever
     model: "reasoning/grok-4.6",
     baseURL: "https://reasoning.example/v1",
     effort: "low",
+    speech: NiaConfig.speech(undefined).speech,
     database: { url: "postgresql://assistant_runtime:s3cret%402024@34.11.220.37:5432/postgres", ssl: "require", max: 4 },
     warnings: [],
   })
@@ -126,4 +127,90 @@ test("flags and transport accept only known values", () => {
   expect(() => NiaConfig.load({ ...deployed, NIA_GRPC_CAN_USE_PRIVATE_FILES: "maybe" })).toThrow(/PRIVATE_FILES/)
   expect(NiaConfig.load({ ...deployed, NIA_TRANSPORT: undefined }).transport).toBe("http")
   expect(() => NiaConfig.load({ ...deployed, NIA_TRANSPORT: "websocket" })).toThrow(/NIA_TRANSPORT/)
+})
+
+test("the committed reasoning.json sets every speech option, with sal as the voice", () => {
+  const { speech, warnings } = NiaConfig.speech(NiaConfig.reasoning.speech)
+  expect(warnings).toEqual([])
+  expect(speech.tts.voice).toBe("sal")
+  // Spelled out in the file, so each option can be found and changed there.
+  expect(NiaConfig.reasoning.speech as unknown).toEqual(speech)
+  expect(NiaConfig.load(deployed).speech).toEqual(speech)
+})
+
+test("a missing or partial speech block takes the defaults silently", () => {
+  const defaults = NiaConfig.speech(undefined)
+  expect(defaults.warnings).toEqual([])
+  expect(NiaConfig.speech({})).toEqual(defaults)
+  const partial = NiaConfig.speech({ tts: { speed: 0.9 } })
+  expect(partial.warnings).toEqual([])
+  expect(partial.speech.tts).toEqual({ ...defaults.speech.tts, speed: 0.9 })
+})
+
+test("speech words are case-insensitive and range edges are accepted", () => {
+  const { speech, warnings } = NiaConfig.speech({
+    tts: { voice: " LEO ", language: "PT-br", codec: "WAV", speed: 1.5 },
+    stt: { language: "ES-mx", format: true, vad_threshold: 0 },
+  })
+  expect(warnings).toEqual([])
+  expect(speech.tts).toMatchObject({ voice: "leo", language: "pt-BR", codec: "wav", speed: 1.5 })
+  expect(speech.stt).toMatchObject({ language: "es-MX", format: true, vad_threshold: 0 })
+})
+
+test.each([
+  ["tts", "voice", "algenib"],
+  ["tts", "voice", 7],
+  ["tts", "language", "xx"],
+  ["tts", "speed", 0.69],
+  ["tts", "speed", 1.51],
+  ["tts", "speed", "1"],
+  ["tts", "text_normalization", "true"],
+  ["tts", "optimize_streaming_latency", 3],
+  ["tts", "codec", "pcm"],
+  ["tts", "sample_rate", 12345],
+  ["tts", "bit_rate", 100],
+  ["tts", "replace", []],
+  ["tts", "replace", { "St. Mary": "saint mary" }],
+  ["tts", "replace", { " ": "blank" }],
+  ["tts", "replace", { Jane: 4 }],
+  ["tts", "replace", { Jane: "a", jane: "b" }],
+  ["tts", "replace", { Jane: "x".repeat(129) }],
+  ["tts", "replace", { ["x".repeat(101)]: "x" }],
+  ["tts", "replace", Object.fromEntries(Array.from({ length: 201 }, (_, index) => [`name ${index}`, "x"]))],
+  ["stt", "model", "whisper"],
+  ["stt", "language", "xx"],
+  ["stt", "format", 1],
+  ["stt", "filler_words", "no"],
+  ["stt", "vad_threshold", 1.01],
+  ["stt", "keyterms", "Jane"],
+  ["stt", "keyterms", ["x".repeat(51)]],
+  ["stt", "keyterms", Array(101).fill("term")],
+] as const)("an invalid speech.%s.%s falls back with one warning (%p)", (group, option, value) => {
+  const result = NiaConfig.speech({ [group]: { [option]: value } })
+  expect(result.speech).toEqual(NiaConfig.speech(undefined).speech)
+  expect(result.warnings).toHaveLength(1)
+  expect(result.warnings[0]).toContain(`speech.${group}.${option}`)
+})
+
+test("formatting is off for a language the provider cannot format", () => {
+  for (const language of ["auto", "hi"]) {
+    const result = NiaConfig.speech({ stt: { language, format: true } })
+    expect(result.speech.stt.format).toBe(false)
+    expect(result.warnings).toHaveLength(1)
+  }
+})
+
+test("misspelt options and malformed blocks are reported, and names in word lists are not", () => {
+  expect(NiaConfig.speech({ tts: { voce: "ara" } }).warnings).toEqual([
+    "reasoning.json speech.tts.voce is not an option; ignoring it",
+  ])
+  expect(NiaConfig.speech([]).warnings).toEqual(["reasoning.json speech must be an object; using its defaults"])
+  expect(NiaConfig.speech({ stt: "fast" }).warnings).toHaveLength(1)
+  const warning = NiaConfig.speech({ tts: { replace: { "Jane Example!": "jane" } } }).warnings.join()
+  expect(warning).not.toContain("Jane")
+})
+
+test("the speech options are never read from the environment", () => {
+  const config = NiaConfig.load({ ...deployed, TTS_VOICE: "ara", REASONING_VOICE: "ara" })
+  expect(config.speech.tts.voice).toBe("sal")
 })

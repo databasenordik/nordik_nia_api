@@ -2,6 +2,7 @@ import { afterAll, beforeEach, expect, test } from "bun:test"
 import * as grpc from "@grpc/grpc-js"
 import { Conversations } from "@nia/backend/conversations"
 import { NiaGrpc } from "@nia/backend/grpc"
+import { NiaSpeech } from "../../backend/src/speech"
 import { postgres } from "../fixture/postgres"
 
 // The gRPC service end to end: a real client and server on nia.proto, conversations in PostgreSQL,
@@ -25,7 +26,24 @@ const engine: NiaGrpc.Engine = {
     return `Answer to ${input.question}`
   },
 }
-const server = await NiaGrpc.serve({ store, engine, principal: "nia-runtime", model: "grok-4.6", hostname: "127.0.0.1", port: 0 })
+let speechFailure: NiaSpeech.Failure | undefined
+let spokenBytes = 4
+let spokenWith: { text: string; signal?: AbortSignal } | undefined
+let heard: { bytes: number; mime: string } | undefined
+const speech: NiaSpeech.Speech = {
+  speak: async (text, signal) => {
+    spokenWith = { text, signal }
+    if (speechFailure) throw speechFailure
+    if (text === "slow") await Bun.sleep(400)
+    return { data: new Uint8Array(spokenBytes).fill(7), mime: "audio/mpeg" }
+  },
+  transcribe: async (audio, mime) => {
+    heard = { bytes: audio.byteLength, mime }
+    if (speechFailure) throw speechFailure
+    return "How many students?"
+  },
+}
+const server = await NiaGrpc.serve({ store, engine, speech, principal: "nia-runtime", model: "grok-4.6", hostname: "127.0.0.1", port: 0 })
 const client = new NiaGrpc.Assistant(`127.0.0.1:${server.port}`, grpc.credentials.createInsecure()) as unknown as Record<
   string,
   (request: object, callback: (error: grpc.ServiceError | null, response: Record<string, unknown>) => void) => void
@@ -235,4 +253,73 @@ test("the engine can read the conversation's recent exchanges under the current 
   await call("Query", { ...query, question: "three", communities: ["Batchewana"] })
   expect(contexts[1]).toEqual([{ question: "one", answer: "Answer to one" }])
   expect(contexts[2]).toEqual([])
+})
+
+test("Speak returns the audio and its type", async () => {
+  const response = await call("Speak", { text: "Hello", user_id: 7 })
+  expect(spokenWith?.text).toBe("Hello")
+  expect([...(response.audio as Buffer)]).toEqual([7, 7, 7, 7])
+  expect(response.mime_type).toBe("audio/mpeg")
+})
+
+test("Transcribe accepts a recording over gRPC's default 4 MiB and returns only its words", async () => {
+  const audio = Buffer.alloc(20 * 1024 * 1024, 3)
+  expect(await call("Transcribe", { audio, mime_type: "audio/webm", user_id: 7 })).toEqual({ text: "How many students?" })
+  expect(heard).toEqual({ bytes: audio.length, mime: "audio/webm" })
+})
+
+test("a recording beyond the server's limit never reaches the provider", async () => {
+  heard = undefined
+  const error = await failed("Transcribe", { audio: Buffer.alloc(22 * 1024 * 1024), user_id: 7 })
+  expect(error.code).toBe("RESOURCE_EXHAUSTED")
+  expect(heard).toBeUndefined()
+})
+
+test("both speech calls need a user", async () => {
+  const expected = { code: "INVALID_ARGUMENT", details: "user_id must be positive" }
+  expect(await failed("Speak", { text: "Hello" })).toEqual(expected)
+  expect(await failed("Transcribe", { audio: Buffer.from([1]), user_id: -1 })).toEqual(expected)
+})
+
+test.each([
+  ["invalid", "INVALID_ARGUMENT"],
+  ["rate_limited", "RESOURCE_EXHAUSTED"],
+  ["unavailable", "UNAVAILABLE"],
+] as const)("a %s speech failure is %s", async (reason, code) => {
+  speechFailure = new NiaSpeech.Failure(reason, "safe message")
+  try {
+    expect(await failed("Speak", { text: "Hello", user_id: 7 })).toEqual({ code, details: "safe message" })
+    expect(await failed("Transcribe", { audio: Buffer.from([1]), user_id: 7 })).toEqual({ code, details: "safe message" })
+  } finally {
+    speechFailure = undefined
+  }
+})
+
+test("long audio needs the caller to raise its own 4 MiB receive limit", async () => {
+  spokenBytes = 5 * 1024 * 1024
+  const raised = new NiaGrpc.Assistant(`127.0.0.1:${server.port}`, grpc.credentials.createInsecure(), {
+    "grpc.max_receive_message_length": 32 * 1024 * 1024,
+  })
+  try {
+    expect((await failed("Speak", { text: "Long", user_id: 7 })).code).toBe("RESOURCE_EXHAUSTED")
+    const response = await new Promise<{ audio: Buffer }>((resolve, reject) =>
+      (raised as any).Speak({ text: "Long", user_id: 7 }, (error: unknown, value: { audio: Buffer }) =>
+        error ? reject(error) : resolve(value),
+      ),
+    )
+    expect(response.audio.length).toBe(spokenBytes)
+  } finally {
+    raised.close()
+    spokenBytes = 4
+  }
+})
+
+test("cancelling Speak cancels the provider request", async () => {
+  const pending = new Promise<grpc.ServiceError | null>((resolve) => {
+    const active = (client as any).Speak({ text: "slow", user_id: 7 }, (error: grpc.ServiceError | null) => resolve(error))
+    setTimeout(() => active.cancel(), 100)
+  })
+  expect((await pending)?.code).toBe(grpc.status.CANCELLED)
+  await Bun.sleep(100)
+  expect(spokenWith?.signal?.aborted).toBe(true)
 })
