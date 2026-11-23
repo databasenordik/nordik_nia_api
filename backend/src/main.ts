@@ -5,6 +5,7 @@ import { NiaEngine } from "./engine"
 import { NiaGrpc } from "./grpc"
 import { NiaHttp } from "./http"
 import { HttpSession } from "./http-session"
+import { NiaSpeech } from "./speech"
 
 const config = NiaConfig.load(process.env)
 for (const warning of config.warnings) console.warn(warning)
@@ -15,15 +16,21 @@ const auth = config.transport === "http" ? HttpSession.load(process.env) : undef
 const hostname = process.env.APP_HOST ?? "127.0.0.1"
 const port = Number(process.env.PORT ?? process.env.APP_PORT ?? 8000)
 const engine = await NiaEngine.start(config)
+const speech = NiaSpeech.create({
+  baseURL: config.baseURL,
+  apiKey: () => process.env.REASONING_API_KEY,
+  settings: config.speech,
+})
 
 if (auth) {
-  NiaHttp.serve({ config, auth, engine, hostname, port })
+  NiaHttp.serve({ config, auth, engine, speech, hostname, port })
   console.log(`NIA HTTP listening on ${hostname}:${port}`)
 } else {
   const store = await Conversations.postgres(config.database)
   const server = await NiaGrpc.serve({
     store,
     engine: NiaGrpc.engine(engine.host),
+    speech,
     principal: config.principal,
     model: config.model.slice(config.model.indexOf("/") + 1),
     hostname,

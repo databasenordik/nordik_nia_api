@@ -2,6 +2,7 @@ import { expect, spyOn, test } from "bun:test"
 import { NiaHttp } from "../../backend/src/http"
 import { NiaConfig } from "@nia/backend/config"
 import { HttpSession } from "@nia/backend/http-session"
+import { NiaSpeech } from "../../backend/src/speech"
 
 const config = NiaConfig.load({
   NIA_GRPC_PRINCIPAL_ID: "test",
@@ -11,13 +12,20 @@ const config = NiaConfig.load({
 })
 const auth = HttpSession.load({})
 
+const silent: NiaSpeech.Speech = {
+  speak: async () => ({ data: new Uint8Array([1, 2, 3]), mime: "audio/mpeg" }),
+  transcribe: async () => "transcript",
+}
+
 function serve(
   prompt: (...args: unknown[]) => Promise<unknown>,
   lists = [{ fileID: 49, defaultPeople: true, private: false }],
+  speech = silent,
 ) {
   return NiaHttp.serve({
     config,
     auth,
+    speech,
     hostname: "127.0.0.1",
     port: 0,
     engine: {
@@ -136,6 +144,225 @@ test.each(["request abort", "response cancellation"])("HTTP %s aborts the provid
     expect(signal.aborted).toBe(true)
   } finally {
     controller.abort()
+    await server.stop(true)
+  }
+})
+
+function voiceServer(speech: Partial<NiaSpeech.Speech> = {}) {
+  return serve(async () => ({}), undefined, { ...silent, ...speech })
+}
+
+function post(server: ReturnType<typeof serve>, route: string, init: RequestInit = {}, signedIn = true) {
+  const headers = new Headers(init.headers)
+  if (signedIn) headers.set("Cookie", `${HttpSession.cookieName}=${HttpSession.issue(auth, "researcher")}`)
+  return fetch(new URL(`/api/chat/${route}`, server.url), { method: "POST", ...init, headers })
+}
+
+const asForm = (fields: Record<string, string>) => {
+  const form = new FormData()
+  for (const [name, value] of Object.entries(fields)) form.append(name, value)
+  return { body: form }
+}
+
+test("both voice routes require sign-in and spend nothing without it", async () => {
+  let used = 0
+  const server = voiceServer({
+    speak: async () => (used++, { data: new Uint8Array([1]), mime: "audio/mpeg" }),
+    transcribe: async () => (used++, "x"),
+  })
+  try {
+    for (const route of ["tts", "transcribe"]) expect((await post(server, route, asForm({ text: "Hi" }), false)).status).toBe(401)
+    expect(used).toBe(0)
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("tts takes text or answer, as a form or JSON, and returns the audio's bytes", async () => {
+  const spoken: string[] = []
+  const server = voiceServer({
+    speak: async (text) => {
+      spoken.push(text)
+      return { data: new Uint8Array([0xff, 0xf3, 7]), mime: "audio/mpeg" }
+    },
+  })
+  try {
+    const inputs: RequestInit[] = [
+      // What nordik-drive sends; the Go API ignores everything but the text.
+      asForm({ text: "Form text", model: "gemini-2.5-flash-tts", voice: "Albenib", language: "en-US", style: "warm" }),
+      asForm({ answer: "Form answer" }),
+      asForm({ text: " ", answer: "Answer when text is blank" }),
+      { body: new URLSearchParams({ text: "Urlencoded" }) },
+      { body: JSON.stringify({ text: "JSON text" }), headers: { "Content-Type": "application/json" } },
+      { body: JSON.stringify({ answer: "JSON answer" }), headers: { "Content-Type": "application/json" } },
+    ]
+    for (const init of inputs) {
+      const response = await post(server, "tts", init)
+      expect(response.status).toBe(200)
+      expect(response.headers.get("content-type")).toBe("audio/mpeg")
+      expect(response.headers.get("cache-control")).toBe("no-store")
+      expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([0xff, 0xf3, 7])
+    }
+    expect(spoken).toEqual(["Form text", "Form answer", "Answer when text is blank", "Urlencoded", "JSON text", "JSON answer"])
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test.each(["{}", "null", "not json", '{"text":42}', ""])("tts refuses %p as the Go API did", async (body) => {
+  const server = voiceServer()
+  try {
+    const response = await post(server, "tts", { body, headers: { "Content-Type": "application/json" } })
+    expect(response.status).toBe(400)
+    expect((await response.json()) as unknown).toEqual({ error: "text is required" })
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("the longest text fits even when every character is escaped", async () => {
+  let spoken = ""
+  const server = voiceServer({
+    speak: async (text) => {
+      spoken = text
+      return { data: new Uint8Array([1]), mime: "audio/mpeg" }
+    },
+  })
+  try {
+    const body = `{"text":"${"\\ud83d\\ude42".repeat(16_000)}"}`
+    expect((await post(server, "tts", { body })).status).toBe(200)
+    expect(Array.from(spoken)).toHaveLength(16_000)
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("transcribe returns the words of the uploaded recording", async () => {
+  let heard: [number[], string] | undefined
+  const server = voiceServer({
+    transcribe: async (audio, mime) => {
+      heard = [[...audio], mime]
+      return "How many students?"
+    },
+  })
+  try {
+    const body = new FormData()
+    body.append("audio", new Blob([new Uint8Array([4, 5, 6])], { type: "audio/webm" }), "q.webm")
+    const response = await post(server, "transcribe", { body })
+    expect(response.status).toBe(200)
+    expect((await response.json()) as unknown).toEqual({ text: "How many students?" })
+    // Bun's form parser takes the type from the file's extension...
+    expect(heard).toEqual([[4, 5, 6], "video/webm"])
+    // ...and gives none to a recorder's default name. The bytes still identify the container upstream.
+    const unnamed = new FormData()
+    unnamed.append("audio", new Blob([new Uint8Array([7])], { type: "audio/webm" }), "blob")
+    expect((await post(server, "transcribe", { body: unnamed })).status).toBe(200)
+    expect(heard).toEqual([[7], ""])
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("transcribe refuses a request without a file, or with a broken form", async () => {
+  const server = voiceServer()
+  try {
+    const broken = { body: "garbage", headers: { "Content-Type": "multipart/form-data; boundary=missing" } }
+    for (const init of [asForm({ other: "x" }), asForm({ audio: "not a file" }), broken, { body: "{}" }])
+      expect((await post(server, "transcribe", init)).status).toBe(400)
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("oversized bodies are refused, with or without a declared length", async () => {
+  let used = 0
+  const server = voiceServer({
+    speak: async () => (used++, { data: new Uint8Array([1]), mime: "audio/mpeg" }),
+    transcribe: async () => (used++, "x"),
+  })
+  try {
+    expect((await post(server, "tts", { body: "x".repeat(256 * 1024 + 1) })).status).toBe(413)
+    const chunk = new Uint8Array(64 * 1024)
+    let sent = 0
+    const body = new ReadableStream({
+      pull(controller) {
+        if (++sent > 8) controller.close()
+        else controller.enqueue(chunk)
+      },
+    })
+    expect((await post(server, "tts", { body })).status).toBe(413)
+    expect((await post(server, "transcribe", { body: new Uint8Array(22 * 1024 * 1024) })).status).toBe(413)
+    expect(used).toBe(0)
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test.each([
+  ["invalid", 400],
+  ["rate_limited", 429],
+  ["unavailable", 503],
+] as const)("a %s speech failure is HTTP %i", async (reason, status) => {
+  const server = voiceServer({
+    speak: async () => {
+      throw new NiaSpeech.Failure(reason, "safe message")
+    },
+  })
+  try {
+    const response = await post(server, "tts", asForm({ text: "Hello" }))
+    expect(response.status).toBe(status)
+    expect((await response.json()) as unknown).toEqual({ error: "safe message" })
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("an unexpected failure does not reveal itself", async () => {
+  const errors = spyOn(console, "error").mockImplementation(() => {})
+  const server = voiceServer({
+    speak: async () => {
+      throw new Error("private detail")
+    },
+  })
+  try {
+    const response = await post(server, "tts", asForm({ text: "Hello" }))
+    expect(response.status).toBe(500)
+    expect((await response.json()) as unknown).toEqual({ error: "speech failed" })
+  } finally {
+    await server.stop(true)
+    errors.mockRestore()
+  }
+})
+
+test("synthesis slower than Bun's 10 second idle limit still returns", async () => {
+  const server = voiceServer({
+    speak: async () => {
+      await Bun.sleep(16_000)
+      return { data: new Uint8Array([1]), mime: "audio/mpeg" }
+    },
+  })
+  try {
+    expect((await post(server, "tts", asForm({ text: "A long answer" }))).status).toBe(200)
+  } finally {
+    await server.stop(true)
+  }
+}, 30_000)
+
+test("a caller leaving cancels the speech request", async () => {
+  let given: AbortSignal | undefined
+  const server = voiceServer({
+    speak: async (_, signal) => {
+      given = signal
+      await Bun.sleep(1000)
+      signal?.throwIfAborted()
+      return { data: new Uint8Array([1]), mime: "audio/mpeg" }
+    },
+  })
+  try {
+    await post(server, "tts", { ...asForm({ text: "Hello" }), signal: AbortSignal.timeout(150) }).catch(() => undefined)
+    await Bun.sleep(300)
+    expect(given?.aborted).toBe(true)
+  } finally {
     await server.stop(true)
   }
 })
