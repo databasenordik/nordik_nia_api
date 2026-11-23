@@ -94,11 +94,11 @@ export function engine(host: Host, options: { readonly concurrency?: number } = 
 }
 
 // A new Session (the first question on this instance, after a restart, or for another selection)
-// starts from the conversation's last six exchanges, the context the Python API keeps.
+// starts from the conversation's last two exchanges.
 export function withContext(history: readonly Exchange[], question: string) {
   if (!history.length) return question
   const clip = (text: string, size: number) => (text.length > size ? `${text.slice(0, size)}…` : text)
-  let turns = history.slice(-6).map((item) => `User: ${clip(item.question, 600)}\nNia: ${clip(item.answer, 1500)}`)
+  let turns = history.slice(-2).map((item) => `User: ${clip(item.question, 600)}\nNia: ${clip(item.answer, 1500)}`)
   while (turns.length > 1 && turns.join("\n\n").length > 10_000) turns = turns.slice(1)
   return `Earlier in this conversation, for context only (check any fact again before stating it):\n\n${turns.join("\n\n")}\n\nCurrent question: ${question}`
 }
@@ -223,7 +223,7 @@ export function handlers(input: {
         communities,
         question: request.question,
         onProviderCall: (call) => providerCalls.push(call),
-        history: () => input.store.recent(current, conversation.id, communities, 6),
+        history: () => input.store.recent(current, conversation.id, communities, 2),
         signal,
       })
     } catch (error) {

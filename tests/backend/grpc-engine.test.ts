@@ -145,11 +145,13 @@ test("a call cancelled before admission creates no Session or provider prompt", 
   expect(fake.prompts).toEqual([])
 })
 
-test("rebuilt context keeps at most six exchanges and about 10,000 characters", () => {
+test("rebuilt context keeps only the last two exchanges and clips long answers", () => {
   const history = Array.from({ length: 8 }, (_, i) => ({ question: `q${i}`, answer: "a".repeat(5000) }))
   const text = NiaGrpc.withContext(history, "Now?")
-  expect(text).not.toContain("User: q1\n")
+  expect(text).not.toContain("User: q5\n")
+  expect(text).toContain("User: q6\n")
   expect(text).toContain("User: q7\n")
+  expect(text.match(/User: q\d\n/g)).toHaveLength(2)
   expect(text.length).toBeLessThan(11_000)
   expect(text).toContain(`${"a".repeat(1500)}…`)
   expect(NiaGrpc.withContext([], "Now?")).toBe("Now?")
