@@ -19,6 +19,7 @@ const engine = await NiaEngine.start(config)
 const speech = NiaSpeech.create({
   baseURL: config.baseURL,
   apiKey: () => process.env.REASONING_API_KEY,
+  geminiApiKey: () => process.env.GEMINI_API_KEY,
   settings: config.speech,
 })
 
