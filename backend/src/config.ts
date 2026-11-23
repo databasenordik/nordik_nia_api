@@ -14,6 +14,13 @@ export const reasoning: { readonly model?: unknown; readonly effort?: unknown; r
 /** reasoning.json's `speech` block, validated, under the names the provider uses. */
 export interface Speech {
   readonly tts: {
+    readonly provider: "xai" | "gemini"
+    readonly gemini: {
+      readonly model: string
+      readonly voice: string
+      readonly style: string
+      readonly location: string
+    }
     readonly voice: string
     readonly language: string
     readonly speed: number
@@ -47,7 +54,7 @@ export interface Config {
   readonly baseURL: string
   /** Sent as reasoning_effort; undefined for a model that takes none. */
   readonly effort?: string
-  /** Spoken answers and transcription, served by the same endpoint and key as the model. */
+  /** Spoken-answer provider and transcription options. */
   readonly speech: Speech
   readonly database: { readonly url: string; readonly ssl: ResearchDatabase.Options["ssl"]; readonly max: number }
   /** Settings that were replaced by a default, for the operator to see at startup. */
@@ -83,6 +90,13 @@ const bitRates = [32000, 64000, 96000, 128000, 192000]
 const transcribers = ["grok-voice-transcribe-2.0"]
 const speechDefaults: Speech = {
   tts: {
+    provider: "xai",
+    gemini: {
+      model: "gemini-2.5-flash-tts",
+      voice: "Algenib",
+      style: "empathetic and more human like",
+      location: "global",
+    },
     voice: "sal",
     language: "en",
     speed: 1,
@@ -142,6 +156,7 @@ export function speech(value: unknown): { speech: Speech; warnings: string[] } {
   const root = block(value, "speech", speechDefaults)
   const tts = block(root.tts, "speech.tts", speechDefaults.tts)
   const stt = block(root.stt, "speech.stt", speechDefaults.stt)
+  const gemini = block(tts.gemini, "speech.tts.gemini", speechDefaults.tts.gemini)
 
   const pick = <T>(name: string, input: unknown, fallback: T, accept: (input: unknown) => T | undefined): T => {
     if (input === undefined) return fallback
@@ -161,6 +176,10 @@ export function speech(value: unknown): { speech: Speech; warnings: string[] } {
   const between = (min: number, max: number) => (input: unknown) =>
     typeof input === "number" && input >= min && input <= max ? input : undefined
   const boolean = (input: unknown) => (typeof input === "boolean" ? input : undefined)
+  const text = (max: number, pattern?: RegExp) => (input: unknown) =>
+    typeof input === "string" && input.trim() && input.length <= max && (!pattern || pattern.test(input.trim()))
+      ? input.trim()
+      : undefined
   // The provider refuses every request when one pronunciation entry is bad, so check the whole map here.
   const replacements = (input: unknown) => {
     const map = object(input)
@@ -195,6 +214,16 @@ export function speech(value: unknown): { speech: Speech; warnings: string[] } {
   return {
     speech: {
       tts: {
+        provider: pick("speech.tts.provider", tts.provider, spoken.provider, word(["xai", "gemini"] as const)),
+        gemini: {
+          model: pick(
+            "speech.tts.gemini.model", gemini.model, spoken.gemini.model,
+            text(100, /^gemini-[a-z0-9.-]+-tts(?:-[a-z0-9.-]+)?$/),
+          ),
+          voice: pick("speech.tts.gemini.voice", gemini.voice, spoken.gemini.voice, text(80, /^[A-Za-z][A-Za-z0-9_-]*$/)),
+          style: pick("speech.tts.gemini.style", gemini.style, spoken.gemini.style, text(2000)),
+          location: pick("speech.tts.gemini.location", gemini.location, spoken.gemini.location, text(80, /^[a-z][a-z0-9-]*$/)),
+        },
         voice: pick("speech.tts.voice", tts.voice, spoken.voice, word(voices)),
         language: pick("speech.tts.language", tts.language, spoken.language, word(spokenLanguages)),
         speed: pick("speech.tts.speed", tts.speed, spoken.speed, between(0.7, 1.5)),

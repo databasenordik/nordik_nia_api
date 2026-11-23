@@ -3,6 +3,13 @@
   "effort": "low",
   "speech": {
     "tts": {
+      "provider": "gemini",
+      "gemini": {
+        "model": "gemini-2.5-flash-tts",
+        "voice": "Algenib",
+        "style": "empathetic and more human like",
+        "location": "global"
+      },
       "voice": "sal",
       "language": "en",
       "speed": 1.0,

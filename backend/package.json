@@ -24,6 +24,7 @@
     "@opencode/schema": "workspace:*",
     "@opencode/sdk": "workspace:*",
     "@opencode/util": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "google-auth-library": "10.5.0"
   }
 }

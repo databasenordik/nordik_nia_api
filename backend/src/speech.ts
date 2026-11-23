@@ -1,9 +1,10 @@
 export * as NiaSpeech from "./speech"
 
-// Spoken answers and transcription on the endpoint and key that answer questions: POST
-// {REASONING_BASE_URL}/tts and /stt, which are xAI's routes (not OpenAI's /audio/*). Moved here from
-// nordikdriveapi's internal/chat, which used Google Vertex.
+// NIA owns spoken answers and transcription. reasoning.json selects Gemini or xAI for TTS;
+// transcription continues to use {REASONING_BASE_URL}/stt.
 import type { NiaConfig } from "./config"
+import { create as geminiSpeech } from "./gemini-speech"
+import type { Auth as GeminiAuth } from "./gemini-speech"
 
 /** Longest text spoken at once, in characters: more than the model's longest (4,096-token) answer usually is. */
 export const maxCharacters = 16_000
@@ -50,6 +51,9 @@ export function create(input: {
   readonly baseURL: string
   /** Read at each call, as the engine does, so the key is never kept. */
   readonly apiKey: () => string | undefined
+  /** Optional Gemini API key; otherwise use Vertex AI with application default credentials. */
+  readonly geminiApiKey?: () => string | undefined
+  readonly geminiAuth?: GeminiAuth
   readonly settings: NiaConfig.Speech
   readonly fetch?: (url: string, init: RequestInit) => Promise<Response>
   readonly timeoutMs?: number
@@ -57,6 +61,14 @@ export function create(input: {
   const { tts, stt } = input.settings
   const base = input.baseURL.replace(/\/+$/, "")
   const send = input.fetch ?? fetch
+  const gemini = tts.provider === "gemini"
+    ? geminiSpeech({ settings: tts.gemini, apiKey: input.geminiApiKey, auth: input.geminiAuth })
+    : undefined
+  const xaiRequest = (operation: "tts" | "stt", body: BodyInit, headers: Record<string, string> = {}) => ({
+    url: `${base}/${operation}`,
+    body,
+    headers: { ...headers, Authorization: `Bearer ${input.apiKey() ?? ""}` },
+  })
 
   // One request and one log line. The line has sizes, time and status; the text, the transcript, the
   // audio and the key stay out of it. Nothing is retried: each attempt is billed.
@@ -64,7 +76,9 @@ export function create(input: {
     readonly operation: "speak" | "transcribe"
     readonly size: Record<string, number>
     readonly signal?: AbortSignal
-    readonly request: () => { readonly body: BodyInit; readonly headers?: Record<string, string> }
+    readonly provider?: "gemini" | "xai"
+    readonly request: () => { readonly url: string; readonly body: BodyInit; readonly headers: Record<string, string> }
+      | Promise<{ readonly url: string; readonly body: BodyInit; readonly headers: Record<string, string> }>
     readonly read: (response: Response) => Promise<A>
     readonly rejected: Failure
   }) {
@@ -74,15 +88,23 @@ export function create(input: {
     let upstream: number | undefined
     try {
       signal?.throwIfAborted()
-      const { body, headers } = options.request()
       const timeout = AbortSignal.timeout(input.timeoutMs ?? timeoutMs)
-      const response = await send(`${base}/${operation === "speak" ? "tts" : "stt"}`, {
+      const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
+      let abortRequest = () => {}
+      const aborted = new Promise<never>((_, reject) => {
+        abortRequest = () => reject(combined.reason)
+        combined.addEventListener("abort", abortRequest, { once: true })
+      })
+      const { url, body, headers } = await Promise.race([Promise.resolve().then(options.request), aborted])
+        .finally(() => combined.removeEventListener("abort", abortRequest))
+      combined.throwIfAborted()
+      const response = await send(url, {
         method: "POST",
         body,
-        headers: { ...headers, Authorization: `Bearer ${input.apiKey() ?? ""}` },
+        headers,
         // A redirect would carry the text or recording somewhere the operator did not configure.
         redirect: "error",
-        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+        signal: combined,
       })
       upstream = response.status
       if (response.ok) return await options.read(response)
@@ -104,6 +126,7 @@ export function create(input: {
         `SPEECH ${JSON.stringify({
           at: new Date().toISOString(),
           operation,
+          ...(options.provider ? { provider: options.provider } : {}),
           status,
           upstream_status: upstream,
           ...options.size,
@@ -118,15 +141,27 @@ export function create(input: {
       const written = raw.trim()
       const characters = Array.from(written).length
       if (characters > maxCharacters) throw new Failure("invalid", `text must be at most ${maxCharacters} characters`)
+      if (gemini) {
+        if (!written) throw new Failure("invalid", "text is required")
+        return call({
+          operation: "speak",
+          provider: "gemini",
+          size: { characters },
+          signal,
+          request: () => gemini.request(written),
+          read: gemini.read,
+          rejected: unavailable(),
+        })
+      }
       const text = plainSpeech(written)
       if (!text) throw new Failure("invalid", "text is required")
       return call({
         operation: "speak",
         size: { characters },
         signal,
-        request: () => ({
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        request: () => xaiRequest(
+          "tts",
+          JSON.stringify({
             text,
             voice_id: tts.voice,
             language: tts.language,
@@ -140,7 +175,8 @@ export function create(input: {
             },
             ...(Object.keys(tts.replace).length ? { replace: tts.replace } : {}),
           }),
-        }),
+          { "Content-Type": "application/json" },
+        ),
         read: async (response) => {
           // A proxy can answer 200 with an error page; that must not be played as audio.
           const type = response.headers.get("content-type") ?? ""
@@ -173,7 +209,7 @@ export function create(input: {
           // The file must come last: the provider may ignore any field after it.
           const file = new Blob([new Uint8Array(audio)], { type: extension ? type : "application/octet-stream" })
           form.append("file", file, extension ? `audio.${extension}` : "audio")
-          return { body: form }
+          return xaiRequest("stt", form)
         },
         read: async (response) => {
           const { text } = (await response.json()) as { text?: unknown }

@@ -129,13 +129,35 @@ test("flags and transport accept only known values", () => {
   expect(() => NiaConfig.load({ ...deployed, NIA_TRANSPORT: "websocket" })).toThrow(/NIA_TRANSPORT/)
 })
 
-test("the committed reasoning.json sets every speech option, with sal as the voice", () => {
+test("reasoning.json selects Gemini and retains the xAI speech settings", () => {
   const { speech, warnings } = NiaConfig.speech(NiaConfig.reasoning.speech)
   expect(warnings).toEqual([])
   expect(speech.tts.voice).toBe("sal")
+  expect(speech.tts.provider).toBe("gemini")
+  expect(speech.tts.gemini).toMatchObject({ model: "gemini-2.5-flash-tts", voice: "Algenib", style: "empathetic and more human like" })
   // Spelled out in the file, so each option can be found and changed there.
   expect(NiaConfig.reasoning.speech as unknown).toEqual(speech)
   expect(NiaConfig.load(deployed).speech).toEqual(speech)
+})
+
+test("the TTS provider can switch without changing either provider's settings", () => {
+  const settings = NiaConfig.reasoning.speech as { tts: object }
+  for (const provider of ["xai", "gemini"]) {
+    const result = NiaConfig.speech({ ...settings, tts: { ...settings.tts, provider } })
+    expect(result.warnings).toEqual([])
+    expect(result.speech.tts.provider).toBe(provider)
+    expect(result.speech.tts.gemini.voice).toBe("Algenib")
+    expect(result.speech.tts.voice).toBe("sal")
+  }
+})
+
+test("missing provider stays compatible with xAI, and malformed Gemini settings are reported", () => {
+  expect(NiaConfig.speech({}).speech.tts.provider).toBe("xai")
+  for (const gemini of [{ model: "../other" }, { voice: "" }, { style: "" }, { location: "evil.example/path" }]) {
+    const result = NiaConfig.speech({ tts: { provider: "gemini", gemini } })
+    expect(result.warnings).toHaveLength(1)
+    expect(result.speech.tts.gemini).toEqual(NiaConfig.speech({}).speech.tts.gemini)
+  }
 })
 
 test("a missing or partial speech block takes the defaults silently", () => {
