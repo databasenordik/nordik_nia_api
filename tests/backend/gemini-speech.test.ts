@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test"
 import { NiaConfig } from "../../backend/src/config"
 import { NiaSpeech } from "../../backend/src/speech"
-import { voicePrompt } from "../../backend/src/voice-prompt"
 
 const pcm = Buffer.from([0, 0, 1, 0, 255, 127, 0, 128])
 const audio = (data = pcm.toString("base64"), mimeType = "audio/L16;codec=pcm;rate=24000") =>
@@ -23,7 +22,9 @@ test("Gemini receives the old delivery prompt and unchanged answer, and returns 
   expect(headers.get("x-goog-api-key")).toBe("gemini-test-key")
   expect(headers.has("authorization")).toBe(false)
   expect(JSON.parse(String(requests[0]!.init.body))).toEqual({
-    contents: [{ role: "user", parts: [{ text: voicePrompt("empathetic and more human like", text) }] }],
+    contents: [{ role: "user", parts: [{ text:
+      "Style: empathetic and more human like.\nRead the following TEXT exactly as written. Do not add or remove words.\n\nTEXT:\n" + text,
+    }] }],
     generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Algenib" } } } },
   })
   const wav = Buffer.from(result.data)
