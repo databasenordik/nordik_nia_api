@@ -22,6 +22,8 @@ export interface Speech {
       readonly location: string
     }
     readonly voice: string
+    /** Trusted xAI delivery markup added after record text is made safe to read. */
+    readonly delivery: "plain" | "warm"
     readonly language: string
     readonly speed: number
     readonly text_normalization: boolean
@@ -98,6 +100,7 @@ const speechDefaults: Speech = {
       location: "global",
     },
     voice: "sal",
+    delivery: "plain",
     language: "en",
     speed: 1,
     text_normalization: false,
@@ -225,6 +228,7 @@ export function speech(value: unknown): { speech: Speech; warnings: string[] } {
           location: pick("speech.tts.gemini.location", gemini.location, spoken.gemini.location, text(80, /^[a-z][a-z0-9-]*$/)),
         },
         voice: pick("speech.tts.voice", tts.voice, spoken.voice, word(voices)),
+        delivery: pick("speech.tts.delivery", tts.delivery, spoken.delivery, word(["plain", "warm"] as const)),
         language: pick("speech.tts.language", tts.language, spoken.language, word(spokenLanguages)),
         speed: pick("speech.tts.speed", tts.speed, spoken.speed, between(0.7, 1.5)),
         text_normalization: pick("speech.tts.text_normalization", tts.text_normalization, spoken.text_normalization, boolean),

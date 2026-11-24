@@ -155,6 +155,8 @@ export function create(input: {
       }
       const text = plainSpeech(written)
       if (!text) throw new Failure("invalid", "text is required")
+      const spoken = tts.delivery === "warm" ? warmDelivery(text) : text
+      if (spoken.length > 60_000) throw new Failure("invalid", "speech formatting exceeds the supported length")
       return call({
         operation: "speak",
         size: { characters },
@@ -162,7 +164,7 @@ export function create(input: {
         request: () => xaiRequest(
           "tts",
           JSON.stringify({
-            text,
+            text: spoken,
             voice_id: tts.voice,
             language: tts.language,
             speed: tts.speed,
@@ -256,4 +258,12 @@ export function plainSpeech(text: string) {
 
 function unavailable() {
   return new Failure("unavailable", "speech is temporarily unavailable")
+}
+
+/** The selected Leo-Warm reader: only trusted tags, applied after plainSpeech sanitizes source notation. */
+function warmDelivery(text: string) {
+  const paragraphs = text.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean)
+  return paragraphs.map((part, index) =>
+    index === 0 || index === paragraphs.length - 1 ? `<soft>${part}</soft>` : part,
+  ).join("\n\n[pause]\n\n")
 }

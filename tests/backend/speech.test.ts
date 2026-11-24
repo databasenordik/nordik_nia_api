@@ -72,6 +72,34 @@ test("a trailing slash on the base URL does not double up", async () => {
   expect(received[0]!.path).toBe("/v1/tts")
 })
 
+test("the selected reader sends Leo-Warm without adding prose instructions", async () => {
+  await speech(NiaConfig.reasoning.speech).speak("Opening paragraph.\n\nDocumented details.\n\nClosing paragraph.")
+  expect(JSON.parse(received[0]!.body.toString())).toEqual({
+    text: "<soft>Opening paragraph.</soft>\n\n[pause]\n\nDocumented details.\n\n[pause]\n\n<soft>Closing paragraph.</soft>",
+    voice_id: "leo", language: "en", speed: 0.92, text_normalization: false,
+    optimize_streaming_latency: 0,
+    output_format: { codec: "mp3", sample_rate: 24000, bit_rate: 128000 },
+  })
+})
+
+test("warm delivery preserves record qualifiers and prevents source speech tags from executing", async () => {
+  await speech({ tts: { delivery: "warm" } }).speak("Jo[h]nson [sic], aged < 10, born 1903 | 1904.\n\nLiteral [cry] and <whisper> notation.")
+  const sent = JSON.parse(received[0]!.body.toString()).text
+  expect(sent).toBe("<soft>Johnson, sic, aged less than 10, born 1903 or 1904.</soft>\n\n[pause]\n\n<soft>Literal, cry, and, whisper, notation.</soft>")
+  expect(sent).not.toContain("[cry]")
+  expect(sent).not.toContain("<whisper>")
+})
+
+test("one paragraph is softened once and has no artificial pause", async () => {
+  await speech({ tts: { delivery: "warm" } }).speak("The date is not recorded.")
+  expect(JSON.parse(received[0]!.body.toString()).text).toBe("<soft>The date is not recorded.</soft>")
+})
+
+test("excessive paragraph markup is refused before reaching the provider", async () => {
+  expect((await failure(speech({ tts: { delivery: "warm" } }).speak("a\n\n".repeat(5300)))).reason).toBe("invalid")
+  expect(received).toHaveLength(0)
+})
+
 test("the key is read at each call", async () => {
   let key = "first"
   const voice = speech({}, { apiKey: () => key })
