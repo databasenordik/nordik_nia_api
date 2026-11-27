@@ -10,8 +10,8 @@
         "style": "empathetic and more human like",
         "location": "global"
       },
-      "voice": "leo",
-      "delivery": "warm",
+      "voice": "ursa",
+      "delivery": "plain",
       "language": "en",
       "speed": 0.92,
       "text_normalization": false,
