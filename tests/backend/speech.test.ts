@@ -72,11 +72,11 @@ test("a trailing slash on the base URL does not double up", async () => {
   expect(received[0]!.path).toBe("/v1/tts")
 })
 
-test("the selected reader sends Leo-Warm without adding prose instructions", async () => {
+test("the selected reader sends Ursa-Measured without adding delivery tags or prose instructions", async () => {
   await speech(NiaConfig.reasoning.speech).speak("Opening paragraph.\n\nDocumented details.\n\nClosing paragraph.")
   expect(JSON.parse(received[0]!.body.toString())).toEqual({
-    text: "<soft>Opening paragraph.</soft>\n\n[pause]\n\nDocumented details.\n\n[pause]\n\n<soft>Closing paragraph.</soft>",
-    voice_id: "leo", language: "en", speed: 0.92, text_normalization: false,
+    text: "Opening paragraph.\n\nDocumented details.\n\nClosing paragraph.",
+    voice_id: "ursa", language: "en", speed: 0.92, text_normalization: false,
     optimize_streaming_latency: 0,
     output_format: { codec: "mp3", sample_rate: 24000, bit_rate: 128000 },
   })

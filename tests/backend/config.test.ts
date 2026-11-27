@@ -129,10 +129,10 @@ test("flags and transport accept only known values", () => {
   expect(() => NiaConfig.load({ ...deployed, NIA_TRANSPORT: "websocket" })).toThrow(/NIA_TRANSPORT/)
 })
 
-test("reasoning.json selects the reviewed Leo-Warm reader and retains Gemini settings", () => {
+test("reasoning.json selects the reviewed Ursa-Measured reader and retains Gemini settings", () => {
   const { speech, warnings } = NiaConfig.speech(NiaConfig.reasoning.speech)
   expect(warnings).toEqual([])
-  expect(speech.tts).toMatchObject({ provider: "xai", voice: "leo", delivery: "warm", speed: 0.92, bit_rate: 128000 })
+  expect(speech.tts).toMatchObject({ provider: "xai", voice: "ursa", delivery: "plain", speed: 0.92, bit_rate: 128000 })
   expect(speech.tts.gemini).toMatchObject({ model: "gemini-2.5-flash-tts", voice: "Algenib", style: "empathetic and more human like" })
   // Spelled out in the file, so each option can be found and changed there.
   expect(NiaConfig.reasoning.speech as unknown).toEqual(speech)
@@ -146,7 +146,7 @@ test("the TTS provider can switch without changing either provider's settings", 
     expect(result.warnings).toEqual([])
     expect(result.speech.tts.provider).toBe(provider)
     expect(result.speech.tts.gemini.voice).toBe("Algenib")
-    expect(result.speech.tts.voice).toBe("leo")
+    expect(result.speech.tts.voice).toBe("ursa")
   }
 })
 
@@ -235,5 +235,5 @@ test("misspelt options and malformed blocks are reported, and names in word list
 
 test("the speech options are never read from the environment", () => {
   const config = NiaConfig.load({ ...deployed, TTS_VOICE: "ara", REASONING_VOICE: "ara" })
-  expect(config.speech.tts.voice).toBe("leo")
+  expect(config.speech.tts.voice).toBe("ursa")
 })
